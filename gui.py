@@ -49,7 +49,10 @@ def gui_main(url, dest):
 
 
 # ── Style setup ──────────────────────────────────────────────────────────
-def _cfg_ttk():
+def _cfg_ttk(root):
+    dpi_scale = root.winfo_fpixels('1i') / 96.0
+    row_h = max(32, int(36 * dpi_scale))
+
     s = ttk.Style()
     s.theme_use('clam')
     s.configure('Dark.TNotebook', background=BG_HEADER, borderwidth=0)
@@ -60,7 +63,7 @@ def _cfg_ttk():
           background=[('selected', BG), ('active', '#1e1e3a')],
           foreground=[('selected', ACCENT), ('active', TEXT_PRI)])
     s.configure('Q.Treeview', background=BG_CARD, foreground=TEXT_PRI,
-                fieldbackground=BG_CARD, borderwidth=0, rowheight=30,
+                fieldbackground=BG_CARD, borderwidth=0, rowheight=row_h,
                 font=FONT_SM)
     s.configure('Q.Treeview.Heading', background='#1a1a35',
                 foreground=TEXT_SEC, font=('Microsoft YaHei', 9, 'bold'),
@@ -397,7 +400,7 @@ class MainWindow(tk.Tk):
             self.state('zoomed')
         except tk.TclError:
             self.geometry('1340x880')
-        _cfg_ttk()
+        _cfg_ttk(self)
 
         self._dest = dest
         self._url = url
