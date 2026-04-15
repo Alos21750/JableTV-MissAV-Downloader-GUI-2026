@@ -546,11 +546,18 @@ class MainWindow(tk.Tk):
             self._dest_var.set(d)
 
     def _open_dest_folder(self):
+        import subprocess, platform
         dest = self._dest_var.get() or 'download'
         folder = os.path.abspath(dest)
         if not os.path.isdir(folder):
             os.makedirs(folder, exist_ok=True)
-        os.startfile(folder)
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(folder)
+        elif system == 'Darwin':
+            subprocess.Popen(['open', folder])
+        else:
+            subprocess.Popen(['xdg-open', folder])
 
     def _add_url(self, url, show_msg=True):
         if not M3U8Sites.VaildateUrl(url):
@@ -567,6 +574,7 @@ class MainWindow(tk.Tk):
     def _add_to_list(self):
         url = self._url_var.get().strip()
         if not url:
+            print('請先輸入網址')
             return
         if M3U8Sites.VaildateUrl(url):
             self._add_url(url)
@@ -581,6 +589,7 @@ class MainWindow(tk.Tk):
         url = self._url_var.get().strip()
         dest = self._dest_var.get() or 'download'
         if not url:
+            print('請先輸入網址')
             return
         if not M3U8Sites.VaildateUrl(url):
             print(f'不支援的網址: {url}')
@@ -591,13 +600,23 @@ class MainWindow(tk.Tk):
 
     def _start_all(self):
         dest = self._dest_var.get() or 'download'
-        for iid in self._queue_tree.get_children():
+        children = self._queue_tree.get_children()
+        if not children:
+            print('下載清單是空的，請先加入網址')
+            return
+        count = 0
+        for iid in children:
             state = self._queue_tree.set(iid, '狀態')
             if state in ('已下載', '下載中', '準備中', '等待中'):
                 continue
             url = self._queue_tree.set(iid, '網址')
             self._queue_tree.set_state(url, '等待中')
             self._dlmgr.enqueue(url, dest)
+            count += 1
+        if count == 0:
+            print('清單中沒有需要下載的項目')
+        else:
+            print(f'已加入 {count} 個下載任務')
         self._update_status()
 
     def _cancel_all_cmd(self):
