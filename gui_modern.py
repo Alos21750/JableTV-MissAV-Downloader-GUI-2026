@@ -277,108 +277,108 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
 
     dlmgr._on_update = on_dl_update
 
-    # ── Custom dark theme CSS ────────────────────────────────────
-    ui.add_head_html('''
-    <style>
-    :root {
-        --q-dark: #0d0d18;
-        --q-dark-page: #0a0a14;
-        --q-primary: #e94560;
-        --q-secondary: #7b61ff;
-    }
-    body { background: #0d0d18; }
-    .q-drawer { background: #0a0a16 !important; }
-    .q-header { background: #101020 !important; }
-    .q-tab-panel { background: #0d0d18 !important; padding: 0 !important; }
-    .q-footer { background: #101020 !important; }
-    .video-card {
-        background: #161630;
-        border: 2px solid #2a2a48;
-        border-radius: 8px;
-        overflow: hidden;
-        cursor: pointer;
-        transition: border-color 0.2s, transform 0.15s;
-    }
-    .video-card:hover {
-        border-color: #7b61ff;
-        transform: translateY(-2px);
-    }
-    .video-card.selected {
-        border-color: #e94560;
-        border-width: 3px;
-    }
-    .video-card .thumb-container {
-        position: relative;
-        width: 100%;
-        padding-top: 56.25%;
-        background: #0a0a18;
-        overflow: hidden;
-    }
-    .video-card .thumb-container img {
-        position: absolute;
-        top: 0; left: 0; width: 100%; height: 100%;
-        object-fit: cover;
-    }
-    .video-card .duration-badge {
-        position: absolute;
-        bottom: 4px; right: 4px;
-        background: rgba(0,0,0,0.8);
-        color: #fff;
-        font-size: 11px;
-        font-family: monospace;
-        padding: 1px 5px;
-        border-radius: 3px;
-    }
-    .video-card .card-title {
-        padding: 8px 10px;
-        color: #f0f0f8;
-        font-size: 13px;
-        line-height: 1.35;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-    }
-    .tag-btn {
-        color: #a0a0c0;
-        font-size: 13px;
-        padding: 4px 12px 4px 20px;
-        cursor: pointer;
-        transition: background 0.15s, color 0.15s;
-        user-select: none;
-    }
-    .tag-btn:hover { background: #1a1a30; color: #e94560; }
-    .group-header {
-        background: #0e0e20;
-        padding: 6px 10px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        user-select: none;
-    }
-    .group-header:hover { background: #141430; }
-    .dl-table .q-table__container { background: #161630 !important; }
-    .console-box {
-        background: #0a0a14;
-        color: #f0f0f8;
-        font-family: 'Consolas', monospace;
-        font-size: 12px;
-        padding: 10px;
-        height: 150px;
-        overflow-y: auto;
-        border-top: 1px solid #222240;
-    }
-    .status-chip {
-        font-size: 11px;
-        font-weight: bold;
-    }
-    </style>
-    ''')
-
     @ui.page('/')
     async def main_page():
         ui.dark_mode(True)
+
+        # ── Custom dark theme CSS ────────────────────────────────────
+        ui.add_head_html('''
+        <style>
+        :root {
+            --q-dark: #0d0d18;
+            --q-dark-page: #0a0a14;
+            --q-primary: #e94560;
+            --q-secondary: #7b61ff;
+        }
+        body { background: #0d0d18; }
+        .q-drawer { background: #0a0a16 !important; }
+        .q-header { background: #101020 !important; }
+        .q-tab-panel { background: #0d0d18 !important; padding: 0 !important; }
+        .q-footer { background: #101020 !important; }
+        .video-card {
+            background: #161630;
+            border: 2px solid #2a2a48;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.15s;
+        }
+        .video-card:hover {
+            border-color: #7b61ff;
+            transform: translateY(-2px);
+        }
+        .video-card.selected {
+            border-color: #e94560;
+            border-width: 3px;
+        }
+        .video-card .thumb-container {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%;
+            background: #0a0a18;
+            overflow: hidden;
+        }
+        .video-card .thumb-container img {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover;
+        }
+        .video-card .duration-badge {
+            position: absolute;
+            bottom: 4px; right: 4px;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            font-size: 11px;
+            font-family: monospace;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+        .video-card .card-title {
+            padding: 8px 10px;
+            color: #f0f0f8;
+            font-size: 13px;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .tag-btn {
+            color: #a0a0c0;
+            font-size: 13px;
+            padding: 4px 12px 4px 20px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            user-select: none;
+        }
+        .tag-btn:hover { background: #1a1a30; color: #e94560; }
+        .group-header {
+            background: #0e0e20;
+            padding: 6px 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            user-select: none;
+        }
+        .group-header:hover { background: #141430; }
+        .dl-table .q-table__container { background: #161630 !important; }
+        .console-box {
+            background: #0a0a14;
+            color: #f0f0f8;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            border-top: 1px solid #222240;
+        }
+        .status-chip {
+            font-size: 11px;
+            font-weight: bold;
+        }
+        </style>
+        ''')
 
         # ── Refs for dynamic update ──────────────────────────────
         video_grid_ref = None
@@ -458,11 +458,12 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
                     if thumb:
                         ui.element('img').props(f'src="{thumb}" loading="lazy"')
                     if dur:
-                        ui.element('div').classes('duration-badge').text(dur)
+                        ui.label(dur).classes('duration-badge')
                 # Title
                 title = v.get('title', '')
-                ui.element('div').classes('card-title').text(
-                    title[:80] + '…' if len(title) > 80 else title)
+                ui.label(
+                    title[:80] + '…' if len(title) > 80 else title
+                ).classes('card-title')
 
         def toggle_select(url: str):
             if url in state.selected_urls:
@@ -476,13 +477,13 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
             nonlocal sel_badge_ref
             n = len(state.selected_urls)
             if sel_badge_ref:
-                sel_badge_ref.text = f'已選 {n} 部' if n else ''
+                sel_badge_ref.set_text(f'已選 {n} 部' if n else '')
 
         # ── Navigation ───────────────────────────────────────────
         def update_nav():
             nonlocal page_label_ref
             if page_label_ref:
-                page_label_ref.text = f'第 {state.page} 頁'
+                page_label_ref.set_text(f'第 {state.page} 頁')
 
         async def goto_page(p: int):
             if p < 1:
@@ -707,7 +708,7 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
                 if expanded:
                     for name, slug in tag_list:
                         tag_url = JableTVBrowser.tag_url(slug)
-                        ui.element('div').classes('tag-btn').text(name).on(
+                        ui.label(name).classes('tag-btn').on(
                             'click', lambda _, u=tag_url, n=name:
                             on_tag_click(u, n))
 
@@ -734,7 +735,7 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
 
         with ui.left_drawer(value=True, bordered=True).classes(
                 'px-0 py-0').style(
-                'width: 200px; background: #0a0a16;') as drawer:
+                'width: 160px; background: #0a0a16;') as drawer:
             # Sidebar header
             with ui.element('div').style(
                     'background: #0e0e20; padding: 12px 14px;'):

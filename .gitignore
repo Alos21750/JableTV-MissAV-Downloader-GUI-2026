@@ -4,6 +4,7 @@
 .idea/
 build/
 build_tmp/
+dist/
 release/*
 !release/*.exe
 download/
