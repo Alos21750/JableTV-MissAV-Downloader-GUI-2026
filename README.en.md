@@ -30,6 +30,11 @@
   <img src="./img/screenshot_download.png" width="800" alt="Download Manager" />
 </p>
 
+### Settings
+<p align="center">
+  <img src="./img/screenshot_settings.png" width="800" alt="Settings" />
+</p>
+
 ---
 
 ## Features
