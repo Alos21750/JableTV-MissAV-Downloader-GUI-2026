@@ -1,6 +1,6 @@
-requests==2.25.1
-beautifulsoup4==4.9.3
-m3u8==0.8.0
-pycryptodome==3.9.9
-cloudscraper==1.2.58
-Pillow~=9.2.0
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+m3u8>=3.0.0
+pycryptodome>=3.15.0
+cloudscraper>=1.2.68
+Pillow>=9.2.0

@@ -3,13 +3,12 @@
 *.DS_store
 .idea/
 build/
-dist/JableTV.csv
-dist/
+build_tmp/
+release/
 download/
 MakeEXE.bat
-命令提示字元.lnk
-jable/
-Old_source/
 desktop.ini
 jableTV.csv
+JableTV.csv
 main.spec
+__pycache__/

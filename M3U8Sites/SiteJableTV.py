@@ -46,10 +46,19 @@ class JableTVList(SiteUrlList_M3U8):
                 print(f"網址 {url} 錯誤!!", flush=True)
             return
 
-        titleBox = self.islist.section.find('div', class_='title-box')
-        self.totalLinks = int(str(titleBox.span.string).partition(" ")[0])
-        self.listType = titleBox.h2.string
-        activeSortType = self.islist.find('li', class_='active')
+        titleBox = self._soup.find('div', class_='title-box')
+        if titleBox and titleBox.span:
+            count_text = str(titleBox.span.get_text(strip=True)).partition(" ")[0]
+            self.totalLinks = int(count_text) if count_text.isdigit() else 0
+        else:
+            self.totalLinks = len(self.links)
+        self.listType = titleBox.h2.string if titleBox and titleBox.h2 else ""
+
+        sort_list = self._soup.find('ul', id=lambda x: x and '_sort_list' in str(x))
+        if sort_list:
+            activeSortType = sort_list.find('li', class_='active')
+        else:
+            activeSortType = self._soup.find('li', class_='active')
         if activeSortType is None: self.sortType = None
         else:  self.sortType = str(activeSortType.a.string)
         self.totalPages = (self.totalLinks + 23) // 24
@@ -71,20 +80,32 @@ class JableTVList(SiteUrlList_M3U8):
             if htmlfile.status_code == 200:
                 content = htmlfile.content
                 soup = BeautifulSoup(content, 'html.parser')
-                divlist = soup.find('div', id="site-content")
+                self._soup = soup
+                divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
+                if divlist is None:
+                    divlist = soup.find('div', id="site-content")
+                    if divlist: divlist = divlist.div
                 divlists_MemberOnly = soup.find_all('div', class_="ribbon-top-left")
-                _memberOnly_urls = [del_url.find_parent('a')['href'] for del_url in divlists_MemberOnly if del_url.getText() == '會員']        
+                _memberOnly_urls = [del_url.find_parent('a')['href'] for del_url in divlists_MemberOnly if del_url.getText() == '會員']
                 if divlist is None: return None
-                divlist = divlist.div
                 self.links = []
                 self.linkDescriptions = []
+                self.thumbnails = []
                 tags = divlist.select('div.detail')
                 for tag in tags:
+                    if not tag.h6 or not tag.h6.a: continue
                     tag_a = tag.h6.a
                     _url = tag_a['href']
                     if _url not in _memberOnly_urls:
                         self.links.append(_url)
-                        self.linkDescriptions.append(str(tag_a.string))
+                        self.linkDescriptions.append(str(tag_a.string or ''))
+                        card = tag.find_parent('div', class_='video-img-box')
+                        thumb = ''
+                        if card:
+                            img = card.select_one('img')
+                            if img:
+                                thumb = img.get('data-src', '') or img.get('src', '')
+                        self.thumbnails.append(thumb)
             return divlist
 
         except Exception:
@@ -94,6 +115,9 @@ class JableTVList(SiteUrlList_M3U8):
         ll = list(JableTVList._sortby_dict)
         if self.searchKeyWord is None: del ll[0]
         return ll
+
+    def getThumbnails(self):
+        return getattr(self, 'thumbnails', [])
 
     def loadPageAtIndex(self, index, sortby):
         if self.currentPage == index:
@@ -113,3 +137,62 @@ class JableTVList(SiteUrlList_M3U8):
         self._url_get(newUrl)
         self.currentPage = index
         self.sortType = sortby
+
+
+class JableTVBrowser:
+    """Fetches categories and video listings from jable.tv for the browse GUI."""
+    _url_root = 'https://jable.tv'
+    _scraper = None
+
+    @classmethod
+    def _get_scraper(cls):
+        if cls._scraper is None:
+            cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
+        return cls._scraper
+
+    @classmethod
+    def fetch_categories(cls):
+        try:
+            r = cls._get_scraper().get(f'{cls._url_root}/categories/', timeout=30)
+            if r.status_code != 200: return []
+            soup = BeautifulSoup(r.content, 'html.parser')
+            cats = []
+            for a in soup.select('a[href*="/categories/"]'):
+                href = a.get('href', '')
+                text = a.get_text(strip=True)
+                if '/categories/' in href and href != f'{cls._url_root}/categories/' and text:
+                    name = text
+                    count_match = re.search(r'(\d[\d,]*)\s*部影片', text)
+                    count = int(count_match.group(1).replace(',', '')) if count_match else 0
+                    name = re.sub(r'\d[\d,]*\s*部影片', '', name).strip()
+                    slug = href.rstrip('/').split('/')[-1]
+                    cats.append({'name': name, 'slug': slug, 'url': href, 'count': count})
+            return cats
+        except Exception:
+            return []
+
+    @classmethod
+    def fetch_page(cls, url):
+        try:
+            r = cls._get_scraper().get(url, timeout=30)
+            if r.status_code != 200: return []
+            soup = BeautifulSoup(r.content, 'html.parser')
+            divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
+            if divlist is None: return []
+            cards = divlist.select('div.video-img-box')
+            videos = []
+            for card in cards:
+                detail = card.select_one('div.detail')
+                if not detail or not detail.h6 or not detail.h6.a: continue
+                tag_a = detail.h6.a
+                img = card.select_one('img')
+                duration_span = card.select_one('span.label')
+                videos.append({
+                    'url': tag_a.get('href', ''),
+                    'title': str(tag_a.string or ''),
+                    'thumbnail': img.get('data-src', '') if img else '',
+                    'duration': duration_span.string if duration_span else '',
+                })
+            return videos
+        except Exception:
+            return []

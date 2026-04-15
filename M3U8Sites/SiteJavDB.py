@@ -50,8 +50,8 @@ class SitePornHoHo(SiteJavdbLive):
     website_dirname_pattern = r'https://www\.pornhoho\.com/(\d+)\.html$'
 
 class SitePornNVR(SiteJavdbLive):
-    website_pattern = r'https://www\.pornvr\.me/\d+\.html'
-    website_dirname_pattern = r'https://www\.pornvr\.me/(\d+)\.html$'
+    website_pattern = r'https://www\.pornnvr\.me/\d+\.html'
+    website_dirname_pattern = r'https://www\.pornnvr\.me/(\d+)\.html$'
 
 class SiteVideo01(SiteJavdbLive):
     website_pattern = r'https://www\.video01\.org/mp4/.+'
