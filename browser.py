@@ -26,8 +26,7 @@ BORDER    = '#2a2a48'
 DIVIDER   = '#222240'
 SUCCESS   = '#4ade80'
 
-THUMB_H   = 180     # 16:9 aspect ratio
-MIN_CARD_W = 220    # minimum card width before reducing columns
+MIN_CARD_W = 290    # minimum card width — gives 4 columns at 1340px (matches website layout)
 CARD_PAD  = 8
 
 
