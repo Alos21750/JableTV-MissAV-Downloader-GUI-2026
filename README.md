@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Downloads-10_Parallel-00C853?style=for-the-badge" />
 </p>
 
-<h1 align="center">StreamSnatcher Pro</h1>
+<h1 align="center">JableTV & MissAV Downloader GUI 2026</h1>
 
 <p align="center">
   <strong>🎬 高速串流影片下載器 ｜ High-Speed Streaming Video Downloader</strong>
