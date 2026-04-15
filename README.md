@@ -21,14 +21,19 @@
 
 ## Screenshots
 
-### Download Manager
+### Browse — JableTV
 <p align="center">
-  <img src="./img/screenshot_download.png" width="700" alt="Download Manager" />
+  <img src="./img/screenshot_browse_jable.png" width="800" alt="JableTV Browse" />
 </p>
 
-### Browse & Multi-Select
+### Browse — MissAV
 <p align="center">
-  <img src="./img/screenshot_browse.png" width="700" alt="Browse Panel" />
+  <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV Browse" />
+</p>
+
+### Download Manager
+<p align="center">
+  <img src="./img/screenshot_download.png" width="800" alt="Download Manager" />
 </p>
 
 ---
