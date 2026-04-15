@@ -4,3 +4,4 @@ m3u8>=3.0.0
 pycryptodome>=3.15.0
 cloudscraper>=1.2.68
 Pillow>=9.2.0
+nicegui>=2.0.0
