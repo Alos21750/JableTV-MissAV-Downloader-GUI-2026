@@ -26,10 +26,9 @@ BORDER    = '#2a2a48'
 DIVIDER   = '#222240'
 SUCCESS   = '#4ade80'
 
-THUMB_W   = 320
-THUMB_H   = 180     # 16:9
-COLS      = 4
-CARD_PAD  = 10
+THUMB_H   = 180     # 16:9 aspect ratio
+MIN_CARD_W = 220    # minimum card width before reducing columns
+CARD_PAD  = 8
 
 
 def _truncate(text, n=68):
@@ -57,10 +56,11 @@ def _get_thumb_session():
 class VideoCard(tk.Frame):
     """A single video thumbnail card with selection support."""
 
-    def __init__(self, master, data, on_click=None, on_dblclick=None, **kw):
+    def __init__(self, master, data, card_w=300, on_click=None, on_dblclick=None, **kw):
         super().__init__(master, bg=BG_CARD, bd=0, highlightthickness=2,
                          highlightbackground=BORDER, cursor='hand2', **kw)
         self._data = data
+        self._card_w = card_w
         self._selected = False
         self._photo = None
         self._on_click = on_click
@@ -68,9 +68,8 @@ class VideoCard(tk.Frame):
         self._build()
 
     def _build(self):
-        # Fixed-size thumbnail container (pixel-sized via pack_propagate)
-        self._thumb_frame = tk.Frame(self, bg='#0a0a18',
-                                     width=THUMB_W, height=THUMB_H)
+        thumb_h = max(120, int(self._card_w * 9 / 16))
+        self._thumb_frame = tk.Frame(self, bg='#0a0a18', height=thumb_h)
         self._thumb_frame.pack(fill='x')
         self._thumb_frame.pack_propagate(False)
 
@@ -93,7 +92,7 @@ class VideoCard(tk.Frame):
         self._title_lbl = tk.Label(
             self, text=_truncate(self._data.get('title', ''), 76),
             bg=BG_CARD, fg=TEXT_PRI, font=('Microsoft YaHei', 9),
-            wraplength=THUMB_W - 12, justify='left', anchor='nw',
+            wraplength=max(180, self._card_w - 16), justify='left', anchor='nw',
             padx=6, pady=5)
         self._title_lbl.pack(fill='x')
 
@@ -269,9 +268,10 @@ class BrowsePanel(tk.Frame):
         self._grid = tk.Frame(self._canvas, bg=BG)
         self._canvas_win = self._canvas.create_window(
             (0, 0), window=self._grid, anchor='nw')
-        self._actual_cols = COLS  # will be recalculated on resize
-        for c in range(COLS):
-            self._grid.columnconfigure(c, weight=1)
+        self._actual_cols = 4
+        self._card_w = 300  # will be recalculated on resize
+        for c in range(self._actual_cols):
+            self._grid.columnconfigure(c, weight=1, uniform='card')
         self._grid.bind('<Configure>',
                         lambda _: self._canvas.configure(
                             scrollregion=self._canvas.bbox('all')))
@@ -279,12 +279,12 @@ class BrowsePanel(tk.Frame):
         self._canvas.bind('<MouseWheel>', self._on_wheel)
         self._grid.bind('<MouseWheel>', self._on_wheel)
 
-        # Status overlay (centered via sticky + column weights)
+        # Status overlay
         self._status_var = tk.StringVar(value='正在載入...')
         self._status_lbl = tk.Label(self._grid, textvariable=self._status_var,
                                     bg=BG, fg=TEXT_SEC,
                                     font=('Microsoft YaHei', 14))
-        self._status_lbl.grid(row=0, column=0, columnspan=COLS,
+        self._status_lbl.grid(row=0, column=0, columnspan=self._actual_cols,
                               pady=140, sticky='')
 
         # ── Bottom nav ───────────────────────────────────────────
@@ -333,7 +333,7 @@ class BrowsePanel(tk.Frame):
             c.destroy()
         self._cards.clear()
         self._status_var.set(msg)
-        self._status_lbl.grid(row=0, column=0, columnspan=COLS,
+        self._status_lbl.grid(row=0, column=0, columnspan=self._actual_cols,
                               pady=140, sticky='')
 
     def _bind_wheel_recursive(self, widget):
@@ -380,9 +380,11 @@ class BrowsePanel(tk.Frame):
 
     def _on_canvas_resize(self, e):
         self._canvas.itemconfig(self._canvas_win, width=e.width)
-        # Recalculate columns based on available width
-        card_full_w = THUMB_W + CARD_PAD * 2 + 4  # card + pad + border
-        new_cols = max(1, e.width // card_full_w)
+        # Recalculate columns: fit as many as possible with min width
+        min_slot = MIN_CARD_W + CARD_PAD * 2 + 4
+        new_cols = max(1, e.width // min_slot)
+        # Compute actual card content width (minus pad and borders)
+        self._card_w = max(MIN_CARD_W, (e.width // new_cols) - CARD_PAD * 2 - 4)
         if new_cols != self._actual_cols and self._cards:
             self._actual_cols = new_cols
             self._relayout_cards()
@@ -463,35 +465,39 @@ class BrowsePanel(tk.Frame):
         self._has_next = len(videos) >= 12
 
         cols = self._actual_cols
-        for c in range(max(cols, COLS) + 1):
-            self._grid.columnconfigure(c, weight=1 if c < cols else 0)
+        card_w = self._card_w
+        for c in range(cols + 1):
+            self._grid.columnconfigure(c, weight=1 if c < cols else 0,
+                                       uniform='card' if c < cols else '')
 
         for i, v in enumerate(videos):
             row, col = divmod(i, cols)
-            card = VideoCard(self._grid, v,
+            card = VideoCard(self._grid, v, card_w=card_w,
                              on_click=self._toggle_select,
                              on_dblclick=self._quick_add)
             card.grid(row=row, column=col, padx=CARD_PAD,
-                      pady=CARD_PAD, sticky='n')
+                      pady=CARD_PAD, sticky='new')
             self._cards.append(card)
             self._bind_wheel_recursive(card)
 
             thumb_url = v.get('thumbnail', '')
             if thumb_url:
                 threading.Thread(target=self._load_thumb,
-                                 args=(thumb_url, card), daemon=True).start()
+                                 args=(thumb_url, card, card_w),
+                                 daemon=True).start()
 
         self._canvas.yview_moveto(0)
         self._update_nav()
         self._load_indicator.configure(text=f'{len(videos)} 部')
 
-    def _load_thumb(self, url, card):
+    def _load_thumb(self, url, card, target_w=300):
         try:
             r = _get_thumb_session().get(url, headers=headers, timeout=20)
             if r.status_code != 200:
                 return
             img = Image.open(io.BytesIO(r.content))
-            img = img.convert('RGB').resize((THUMB_W, THUMB_H), Image.LANCZOS)
+            thumb_h = max(120, int(target_w * 9 / 16))
+            img = img.convert('RGB').resize((target_w, thumb_h), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             card.after(0, lambda: card.set_thumbnail(photo))
         except Exception:
@@ -549,13 +555,13 @@ class BrowsePanel(tk.Frame):
     def _relayout_cards(self):
         """Re-grid existing cards when column count changes."""
         cols = self._actual_cols
-        # Reconfigure grid columns
-        for c in range(max(cols, COLS) + 1):
-            self._grid.columnconfigure(c, weight=1 if c < cols else 0)
+        for c in range(cols + 1):
+            self._grid.columnconfigure(c, weight=1 if c < cols else 0,
+                                       uniform='card' if c < cols else '')
         for i, card in enumerate(self._cards):
             row, col = divmod(i, cols)
             card.grid(row=row, column=col, padx=CARD_PAD,
-                      pady=CARD_PAD, sticky='n')
+                      pady=CARD_PAD, sticky='new')
 
     def _flash(self, msg):
         old = self._load_indicator.cget('text')
