@@ -390,9 +390,13 @@ class MainWindow(tk.Tk):
     def __init__(self, dest='download', url=''):
         super().__init__()
         self.title('JableTV & MissAV Downloader')
-        self.geometry('1340x880')
         self.minsize(980, 660)
         self.configure(bg=BG)
+        # Start maximized; geometry is fallback if zoomed fails
+        try:
+            self.state('zoomed')
+        except tk.TclError:
+            self.geometry('1340x880')
         _cfg_ttk()
 
         self._dest = dest

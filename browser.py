@@ -160,6 +160,9 @@ class BrowsePanel(tk.Frame):
         self._cards = []
         self._selected_urls = set()
         self._loading = False
+        # DPI-aware card sizing: scale base width by display density
+        self._dpi_scale = master.winfo_fpixels('1i') / 96.0
+        self._min_card_w = int(MIN_CARD_W * self._dpi_scale)
         self._build_style()
         self._build_ui()
         self._start_cat_load()
@@ -379,11 +382,10 @@ class BrowsePanel(tk.Frame):
 
     def _on_canvas_resize(self, e):
         self._canvas.itemconfig(self._canvas_win, width=e.width)
-        # Recalculate columns: fit as many as possible with min width
-        min_slot = MIN_CARD_W + CARD_PAD * 2 + 4
+        # Recalculate columns using DPI-scaled minimum card width
+        min_slot = self._min_card_w + CARD_PAD * 2 + 4
         new_cols = max(1, e.width // min_slot)
-        # Compute actual card content width (minus pad and borders)
-        self._card_w = max(MIN_CARD_W, (e.width // new_cols) - CARD_PAD * 2 - 4)
+        self._card_w = max(self._min_card_w, (e.width // new_cols) - CARD_PAD * 2 - 4)
         if new_cols != self._actual_cols and self._cards:
             self._actual_cols = new_cols
             self._relayout_cards()
