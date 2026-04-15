@@ -20,6 +20,44 @@ default_max_workers = min(os.cpu_count() * 2, 16) if os.cpu_count() else 8
 _session_lock = threading.Lock()
 _session = None
 
+# ── Global speed limiter (token bucket) ──────────────────────────
+class _SpeedLimiter:
+    """Thread-safe token-bucket rate limiter shared across all downloads."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._limit_bps = 0  # 0 = unlimited
+        self._tokens = 0.0
+        self._last = time.time()
+
+    def set_limit(self, mbps: float) -> None:
+        with self._lock:
+            self._limit_bps = int(mbps * 1024 * 1024) if mbps > 0 else 0
+            self._tokens = float(self._limit_bps)
+            self._last = time.time()
+
+    def acquire(self, nbytes: int) -> None:
+        with self._lock:
+            limit = self._limit_bps
+        if limit <= 0:
+            return
+        while nbytes > 0:
+            with self._lock:
+                now = time.time()
+                self._tokens += (now - self._last) * self._limit_bps
+                self._last = now
+                if self._tokens > self._limit_bps:
+                    self._tokens = float(self._limit_bps)
+                take = min(nbytes, int(self._tokens))
+                if take > 0:
+                    self._tokens -= take
+                    nbytes -= take
+            if nbytes > 0:
+                time.sleep(0.05)
+
+speed_limiter = _SpeedLimiter()
+
+
 def _get_session():
     global _session
     if _session is None:
@@ -73,11 +111,11 @@ class M3U8Crawler:
             self._dirName = self.validate_url(url)
             if not self._dirName: return
             self._url = url
-            self._temp_folder = os.path.join(os.getcwd(), self._dirName)
             if (savepath is None) or (savepath == ''):
-                self._dest_folder = self._temp_folder
+                self._dest_folder = os.path.join(os.getcwd(), self._dirName)
             else:
-                self._dest_folder = os.path.join(os.getcwd(), savepath)
+                self._dest_folder = os.path.abspath(savepath)
+            self._temp_folder = os.path.join(self._dest_folder, self._dirName)
 
             self.get_url_infos()
             if self.is_url_vaildate():
@@ -232,6 +270,7 @@ class M3U8Crawler:
             if response.status_code != 200:
                 return False
             content_ts = response.content
+            speed_limiter.acquire(len(content_ts))
             if self._key_content:
                 cipher = self._make_cipher(seq_num)
                 content_ts = cipher.decrypt(content_ts)

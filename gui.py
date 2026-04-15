@@ -190,16 +190,20 @@ class DownloadQueue(ttk.Treeview):
         sb.pack(side=tk.RIGHT, fill='y')
         self.pack(side=tk.LEFT, fill='both', expand=True)
 
+        dpi_scale = master.winfo_fpixels('1i') / 96.0
+        def _w(px):
+            return max(px, int(px * dpi_scale))
+
         self.heading('狀態', text='狀態')
         self.heading('名稱', text='名稱')
         self.heading('進度', text='進度')
         self.heading('速度', text='速度')
         self.heading('網址', text='網址')
-        self.column('狀態', width=72, stretch=False)
-        self.column('名稱', stretch=True, minwidth=160)
-        self.column('進度', width=72, stretch=False)
-        self.column('速度', width=90, stretch=False)
-        self.column('網址', width=200, stretch=False)
+        self.column('狀態', width=_w(80), stretch=False)
+        self.column('名稱', stretch=True, minwidth=_w(200))
+        self.column('進度', width=_w(80), stretch=False)
+        self.column('速度', width=_w(100), stretch=False)
+        self.column('網址', width=_w(240), stretch=False)
 
         for state, color in self.STATUS_TAG.items():
             self.tag_configure(state, foreground=color)
@@ -360,7 +364,10 @@ class _DownloadManager:
                 self._safe_state(url, '已取消')
             else:
                 self._safe_state(url, '已下載', progress='100%', speed='')
-        except Exception:
+        except Exception as exc:
+            import traceback
+            print(f'[下載失敗] {url}\n  {exc}', flush=True)
+            traceback.print_exc()
             with self._lock:
                 self._active.pop(url, None)
             self._safe_state(url, '未完成')
@@ -439,6 +446,11 @@ class MainWindow(tk.Tk):
         nb.add(dl_frame, text='  下載  ')
         self._build_dl_tab(dl_frame)
 
+        # Tab 3: Settings
+        settings_frame = tk.Frame(nb, bg=BG)
+        nb.add(settings_frame, text='  設定  ')
+        self._build_settings_tab(settings_frame)
+
     def _build_dl_tab(self, parent):
         # ── Input section ─────────────────────────────────────────
         input_section = tk.Frame(parent, bg=BG_SECTION, padx=16, pady=12)
@@ -488,6 +500,24 @@ class MainWindow(tk.Tk):
         _btn(bar, '📂 開啟資料夾', self._open_dest_folder).pack(
             side=tk.RIGHT, padx=4)
 
+        # Speed limiter
+        tk.Frame(bar, bg=DIVIDER, width=1).pack(
+            side=tk.RIGHT, fill='y', padx=10, pady=2)
+        tk.Label(bar, text='速度限制', bg=BG_HEADER, fg=TEXT_SEC,
+                 font=FONT_SM).pack(side=tk.RIGHT)
+        self._speed_var = tk.StringVar(value='無限制')
+        speed_opts = ['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
+                      '10 MB/s', '15 MB/s']
+        speed_menu = tk.OptionMenu(bar, self._speed_var, *speed_opts,
+                                   command=self._on_speed_change)
+        speed_menu.config(bg=BG_CARD, fg=TEXT_PRI, activebackground=BG_INPUT,
+                          activeforeground=TEXT_PRI, relief='flat',
+                          highlightthickness=0, font=FONT_SM, bd=0)
+        speed_menu['menu'].config(bg=BG_CARD, fg=TEXT_PRI,
+                                  activebackground=ACCENT,
+                                  activeforeground='#fff', font=FONT_SM)
+        speed_menu.pack(side=tk.RIGHT, padx=(4, 8))
+
         # ── Status bar ────────────────────────────────────────────
         tk.Frame(parent, bg=DIVIDER, height=1).pack(fill='x')
         status_bar = tk.Frame(parent, bg=BG_HEADER, pady=6, padx=16)
@@ -522,6 +552,71 @@ class MainWindow(tk.Tk):
 
         self._update_status()
 
+    def _build_settings_tab(self, parent):
+        from M3U8Sites.M3U8Crawler import speed_limiter
+
+        outer = tk.Frame(parent, bg=BG, padx=40, pady=30)
+        outer.pack(fill='both', expand=True)
+
+        tk.Label(outer, text='設定', bg=BG, fg=TEXT_PRI,
+                 font=FONT_TITLE).pack(anchor='w', pady=(0, 20))
+
+        # ── Save location ─────────────────────────────────────────
+        grp1 = tk.LabelFrame(outer, text='下載設定', bg=BG_SECTION,
+                              fg=TEXT_SEC, font=FONT_SEC_TITLE,
+                              bd=1, relief='groove', padx=16, pady=12)
+        grp1.pack(fill='x', pady=(0, 16))
+
+        row = tk.Frame(grp1, bg=BG_SECTION)
+        row.pack(fill='x', pady=4)
+        tk.Label(row, text='存放位置', bg=BG_SECTION, fg=TEXT_SEC,
+                 font=FONT_SM, width=12, anchor='e').pack(side=tk.LEFT)
+        _entry(row, var=self._dest_var, width=50).pack(
+            side=tk.LEFT, fill='x', expand=True, padx=(8, 0), ipady=4)
+        _btn(row, '瀏覽...', self._pick_dest).pack(side=tk.LEFT, padx=(8, 0))
+
+        # ── Speed limit ───────────────────────────────────────────
+        row2 = tk.Frame(grp1, bg=BG_SECTION)
+        row2.pack(fill='x', pady=4)
+        tk.Label(row2, text='速度限制', bg=BG_SECTION, fg=TEXT_SEC,
+                 font=FONT_SM, width=12, anchor='e').pack(side=tk.LEFT)
+        speed_opts = ['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
+                      '10 MB/s', '15 MB/s']
+        sm = tk.OptionMenu(row2, self._speed_var, *speed_opts,
+                           command=self._on_speed_change)
+        sm.config(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
+                  activeforeground=TEXT_PRI, relief='flat',
+                  highlightthickness=1, highlightbackground=BORDER,
+                  font=FONT_SM, bd=0, width=12)
+        sm['menu'].config(bg=BG_CARD, fg=TEXT_PRI,
+                          activebackground=ACCENT,
+                          activeforeground='#fff', font=FONT_SM)
+        sm.pack(side=tk.LEFT, padx=(8, 0))
+
+        # ── Concurrent downloads ──────────────────────────────────
+        row3 = tk.Frame(grp1, bg=BG_SECTION)
+        row3.pack(fill='x', pady=4)
+        tk.Label(row3, text='同時下載數', bg=BG_SECTION, fg=TEXT_SEC,
+                 font=FONT_SM, width=12, anchor='e').pack(side=tk.LEFT)
+        tk.Label(row3, text=str(MAX_CONCURRENT), bg=BG_SECTION,
+                 fg=TEXT_PRI, font=FONT_SM).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(row3, text='(固定)', bg=BG_SECTION, fg=TEXT_DIM,
+                 font=FONT_SM).pack(side=tk.LEFT, padx=(8, 0))
+
+        # ── About section ─────────────────────────────────────────
+        grp2 = tk.LabelFrame(outer, text='關於', bg=BG_SECTION,
+                              fg=TEXT_SEC, font=FONT_SEC_TITLE,
+                              bd=1, relief='groove', padx=16, pady=12)
+        grp2.pack(fill='x', pady=(0, 16))
+
+        tk.Label(grp2, text='JableTV & MissAV Downloader GUI',
+                 bg=BG_SECTION, fg=TEXT_PRI, font=FONT).pack(anchor='w')
+        tk.Label(grp2, text='v1.0.0-beta  •  僅供學習與研究用途',
+                 bg=BG_SECTION, fg=TEXT_SEC, font=FONT_SM).pack(anchor='w', pady=(4, 0))
+        tk.Label(grp2,
+                 text='GitHub: Alos21750/JableTV-MissAV-Downloader-GUI-2026',
+                 bg=BG_SECTION, fg=ACCENT2, font=FONT_SM).pack(anchor='w', pady=(4, 0))
+
     # ── Browse → Download bridges ────────────────────────────────────────
 
     def _from_browser(self, url):
@@ -539,6 +634,16 @@ class MainWindow(tk.Tk):
         self._update_status()
 
     # ── Download helpers ─────────────────────────────────────────────────
+
+    def _on_speed_change(self, val):
+        from M3U8Sites.M3U8Crawler import speed_limiter
+        if val == '無限制':
+            speed_limiter.set_limit(0)
+            print('速度限制: 無限制', flush=True)
+        else:
+            mbps = float(val.split()[0])
+            speed_limiter.set_limit(mbps)
+            print(f'速度限制: {val}', flush=True)
 
     def _pick_dest(self):
         d = tkinter.filedialog.askdirectory()

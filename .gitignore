@@ -5,7 +5,6 @@
 build/
 build_tmp/
 release/
-dist/
 download/
 MakeEXE.bat
 desktop.ini

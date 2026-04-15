@@ -41,9 +41,32 @@ class SiteMissAV(M3U8Crawler):
     website_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-]+)|https://(?:www\.)?missav\.(?:ai|ws)/([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
     website_dirname_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
 
+    _shared_scraper = None
+    _scraper_lock = __import__('threading').Lock()
+
+    @classmethod
+    def _get_scraper(cls):
+        with cls._scraper_lock:
+            if cls._shared_scraper is None:
+                cls._shared_scraper = cloudscraper.create_scraper(
+                    browser=request_headers, delay=10)
+            return cls._shared_scraper
+
     def get_url_infos(self):
-        scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
-        htmlfile = scraper.get(self._url, timeout=30)
+        import time
+        scraper = self._get_scraper()
+        last_exc = None
+        for attempt in range(3):
+            try:
+                htmlfile = scraper.get(self._url, timeout=60)
+                break
+            except Exception as e:
+                last_exc = e
+                print(f'[MissAV] 嘗試 {attempt+1}/3 失敗: {e}', flush=True)
+                if attempt < 2:
+                    time.sleep(3 * (attempt + 1))
+        else:
+            raise last_exc
         if htmlfile.status_code != 200:
             raise Exception(f"HTTP {htmlfile.status_code} for {self._url}")
 
