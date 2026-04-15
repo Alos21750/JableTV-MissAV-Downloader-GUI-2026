@@ -183,7 +183,8 @@ class DownloadQueue(ttk.Treeview):
     def __init__(self, master, **kw):
         frame = tk.Frame(master, bg=BG)
         super().__init__(frame, style='Q.Treeview',
-                         columns=self.COLS, show='headings', **kw)
+                         columns=self.COLS, show='headings',
+                         selectmode='extended', **kw)
         sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.yview,
                            style='Vertical.TScrollbar')
         self.configure(yscrollcommand=sb.set)
@@ -209,6 +210,7 @@ class DownloadQueue(ttk.Treeview):
             self.tag_configure(state, foreground=color)
 
         self.bind('<Delete>', self._on_delete)
+        self.bind('<Control-a>', self._select_all)
         self._frame = frame
         self.pack   = frame.pack
         self.grid   = frame.grid
@@ -217,6 +219,12 @@ class DownloadQueue(ttk.Treeview):
 
     def _iid(self, url):
         return str(hash(url))
+
+    def _select_all(self, _e=None):
+        children = self.get_children()
+        if children:
+            self.selection_set(children)
+        return 'break'
 
     def _on_delete(self, _e):
         sel = self.selection()
@@ -227,6 +235,32 @@ class DownloadQueue(ttk.Treeview):
         for iid in sel:
             self.delete(iid)
         self.modified = True
+
+    def delete_selected(self):
+        """Delete selected items. Returns list of deleted URLs."""
+        sel = self.selection()
+        if not sel:
+            print('請先選取要刪除的項目')
+            return []
+        urls = [self.set(iid, '網址') for iid in sel]
+        for iid in sel:
+            self.delete(iid)
+        self.modified = True
+        print(f'已刪除 {len(urls)} 個項目')
+        return urls
+
+    def clear_all(self):
+        """Remove every item from the queue."""
+        children = self.get_children()
+        if not children:
+            print('下載清單已經是空的')
+            return []
+        urls = [self.set(iid, '網址') for iid in children]
+        for iid in children:
+            self.delete(iid)
+        self.modified = True
+        print(f'已清除 {len(urls)} 個項目')
+        return urls
 
     def add_item(self, url, name='', state=''):
         iid = self._iid(url)
@@ -492,6 +526,15 @@ class MainWindow(tk.Tk):
         _btn(bar, '加入清單', self._add_to_list).pack(side=tk.LEFT, padx=4)
         _btn(bar, '導入文件', self._import_file).pack(side=tk.LEFT, padx=4)
 
+        # Separator
+        tk.Frame(bar, bg=DIVIDER, width=1).pack(
+            side=tk.LEFT, fill='y', padx=10, pady=2)
+
+        # Queue management
+        _btn(bar, '刪除選取', self._delete_selected).pack(side=tk.LEFT, padx=4)
+        _btn(bar, '清空清單', self._clear_queue, danger=True).pack(
+            side=tk.LEFT, padx=4)
+
         # Right side
         _btn(bar, '全部取消', self._cancel_all_cmd, danger=True).pack(
             side=tk.RIGHT, padx=(6, 0))
@@ -663,6 +706,23 @@ class MainWindow(tk.Tk):
             subprocess.Popen(['open', folder])
         else:
             subprocess.Popen(['xdg-open', folder])
+
+    def _delete_selected(self):
+        urls = self._queue_tree.delete_selected()
+        for url in urls:
+            self._dlmgr.cancel(url)
+        self._update_status()
+
+    def _clear_queue(self):
+        children = self._queue_tree.get_children()
+        if not children:
+            print('下載清單已經是空的')
+            return
+        if not messagebox.askyesno('清空清單', f'確定清空全部 {len(children)} 個項目？'):
+            return
+        self._dlmgr.cancel_all()
+        self._queue_tree.clear_all()
+        self._update_status()
 
     def _add_url(self, url, show_msg=True):
         if not M3U8Sites.VaildateUrl(url):
