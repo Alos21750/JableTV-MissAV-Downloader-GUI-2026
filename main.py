@@ -2,6 +2,18 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import ctypes
+import sys
+
+# Enable DPI awareness BEFORE any Tk/GUI imports
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-monitor V2
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 from args import *
 from gui import *
 

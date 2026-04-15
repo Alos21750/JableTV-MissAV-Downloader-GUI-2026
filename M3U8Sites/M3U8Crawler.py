@@ -223,7 +223,7 @@ class M3U8Crawler:
         if os.path.exists(saveName):
             with self._speed_lock:
                 if (url, seq_num) in self._pending_set:
-                    self._pending_set.discard((url, seq_num))
+                    self._pending_set.discard((seq_num, url))
             return True
 
         try:
@@ -238,7 +238,7 @@ class M3U8Crawler:
             with open(saveName, 'wb') as f:
                 f.write(content_ts)
             with self._speed_lock:
-                self._pending_set.discard((url, seq_num))
+                self._pending_set.discard((seq_num, url))
                 self._bytes_downloaded += len(content_ts)
                 remain = len(self._pending_set)
                 elapsed = time.time() - self._speed_start

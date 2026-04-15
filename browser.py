@@ -26,10 +26,10 @@ BORDER    = '#2a2a48'
 DIVIDER   = '#222240'
 SUCCESS   = '#4ade80'
 
-THUMB_W   = 288
-THUMB_H   = 162     # 16:9
+THUMB_W   = 320
+THUMB_H   = 180     # 16:9
 COLS      = 4
-CARD_PAD  = 8
+CARD_PAD  = 10
 
 
 def _truncate(text, n=68):
@@ -269,9 +269,9 @@ class BrowsePanel(tk.Frame):
         self._grid = tk.Frame(self._canvas, bg=BG)
         self._canvas_win = self._canvas.create_window(
             (0, 0), window=self._grid, anchor='nw')
-        # Pre-configure columns so status label centers properly
+        self._actual_cols = COLS  # will be recalculated on resize
         for c in range(COLS):
-            self._grid.columnconfigure(c, weight=1, minsize=THUMB_W + CARD_PAD * 2)
+            self._grid.columnconfigure(c, weight=1)
         self._grid.bind('<Configure>',
                         lambda _: self._canvas.configure(
                             scrollregion=self._canvas.bbox('all')))
@@ -289,30 +289,37 @@ class BrowsePanel(tk.Frame):
 
         # ── Bottom nav ───────────────────────────────────────────
         tk.Frame(self, bg=DIVIDER, height=1).pack(fill='x')
-        nav = tk.Frame(self, bg=BG_BAR, pady=7)
+        nav = tk.Frame(self, bg=BG_BAR, pady=10)
         nav.pack(fill='x')
 
-        def _nav_btn(parent, txt, cmd):
-            return tk.Button(parent, text=txt, bg=BG_CARD, fg=TEXT_SEC,
-                             activebackground=ACCENT, activeforeground='#fff',
-                             relief='flat', font=('', 10, 'bold'),
-                             padx=10, pady=3, bd=0, command=cmd,
+        # Center container for pagination controls
+        nav_center = tk.Frame(nav, bg=BG_BAR)
+        nav_center.pack(side=tk.LEFT, expand=True)
+
+        def _nav_btn(parent, txt, cmd, accent=False):
+            bg = ACCENT if accent else BG_CARD
+            fg = '#fff' if accent else TEXT_PRI
+            abg = '#c73350' if accent else ACCENT
+            return tk.Button(parent, text=txt, bg=bg, fg=fg,
+                             activebackground=abg, activeforeground='#fff',
+                             relief='flat', font=('Microsoft YaHei', 11, 'bold'),
+                             padx=18, pady=6, bd=0, command=cmd,
                              cursor='hand2')
 
-        self._btn_first = _nav_btn(nav, '«', lambda: self._goto(1))
-        self._btn_first.pack(side=tk.LEFT, padx=(10, 2))
-        self._btn_prev = _nav_btn(nav, '上一頁', lambda: self._goto(self._page - 1))
-        self._btn_prev.pack(side=tk.LEFT, padx=2)
-        self._page_lbl = tk.Label(nav, text='---', bg=BG_BAR, fg=TEXT_PRI,
-                                  font=('Consolas', 10, 'bold'), width=12,
+        self._btn_first = _nav_btn(nav_center, '  «  首頁  ', lambda: self._goto(1))
+        self._btn_first.pack(side=tk.LEFT, padx=(0, 6))
+        self._btn_prev = _nav_btn(nav_center, '  ‹  上一頁  ', lambda: self._goto(self._page - 1))
+        self._btn_prev.pack(side=tk.LEFT, padx=6)
+        self._page_lbl = tk.Label(nav_center, text='---', bg=BG_BAR, fg=TEXT_PRI,
+                                  font=('Microsoft YaHei', 12, 'bold'), width=10,
                                   anchor='center')
-        self._page_lbl.pack(side=tk.LEFT, padx=6)
-        self._btn_next = _nav_btn(nav, '下一頁', lambda: self._goto(self._page + 1))
-        self._btn_next.pack(side=tk.LEFT, padx=2)
+        self._page_lbl.pack(side=tk.LEFT, padx=10)
+        self._btn_next = _nav_btn(nav_center, '  下一頁  ›  ', lambda: self._goto(self._page + 1), accent=True)
+        self._btn_next.pack(side=tk.LEFT, padx=6)
 
         self._load_indicator = tk.Label(nav, text='', bg=BG_BAR, fg=ACCENT,
-                                        font=('', 9))
-        self._load_indicator.pack(side=tk.RIGHT, padx=10)
+                                        font=('Microsoft YaHei', 10))
+        self._load_indicator.pack(side=tk.RIGHT, padx=12)
 
         self._update_nav()
 
@@ -373,6 +380,12 @@ class BrowsePanel(tk.Frame):
 
     def _on_canvas_resize(self, e):
         self._canvas.itemconfig(self._canvas_win, width=e.width)
+        # Recalculate columns based on available width
+        card_full_w = THUMB_W + CARD_PAD * 2 + 4  # card + pad + border
+        new_cols = max(1, e.width // card_full_w)
+        if new_cols != self._actual_cols and self._cards:
+            self._actual_cols = new_cols
+            self._relayout_cards()
 
     def _on_wheel(self, e):
         self._canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
@@ -426,7 +439,10 @@ class BrowsePanel(tk.Frame):
 
     def _fetch_bg(self):
         url = self._build_page_url()
-        videos = self._browser().fetch_page(url)
+        try:
+            videos = self._browser().fetch_page(url)
+        except Exception:
+            videos = []
         self.after(0, lambda: self._render(videos))
 
     def _render(self, videos):
@@ -446,8 +462,12 @@ class BrowsePanel(tk.Frame):
         # If we got a full page of results, assume there's a next page
         self._has_next = len(videos) >= 12
 
+        cols = self._actual_cols
+        for c in range(max(cols, COLS) + 1):
+            self._grid.columnconfigure(c, weight=1 if c < cols else 0)
+
         for i, v in enumerate(videos):
-            row, col = divmod(i, COLS)
+            row, col = divmod(i, cols)
             card = VideoCard(self._grid, v,
                              on_click=self._toggle_select,
                              on_dblclick=self._quick_add)
@@ -526,6 +546,17 @@ class BrowsePanel(tk.Frame):
             self._btn_addsel.configure(state=tk.DISABLED)
             self._btn_dlsel.configure(state=tk.DISABLED)
 
+    def _relayout_cards(self):
+        """Re-grid existing cards when column count changes."""
+        cols = self._actual_cols
+        # Reconfigure grid columns
+        for c in range(max(cols, COLS) + 1):
+            self._grid.columnconfigure(c, weight=1 if c < cols else 0)
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, cols)
+            card.grid(row=row, column=col, padx=CARD_PAD,
+                      pady=CARD_PAD, sticky='n')
+
     def _flash(self, msg):
         old = self._load_indicator.cget('text')
         self._load_indicator.configure(text=msg, fg=SUCCESS)
@@ -538,10 +569,14 @@ class BrowsePanel(tk.Frame):
         p = self._page
         self._page_lbl.configure(text=f'第 {p} 頁')
         can_prev = p > 1
-        can_next = self._has_next
+        can_next = self._has_next and not self._loading
         self._btn_first.configure(
-            state=tk.NORMAL if can_prev else tk.DISABLED)
+            state=tk.NORMAL if can_prev else tk.DISABLED,
+            fg=TEXT_PRI if can_prev else TEXT_DIM)
         self._btn_prev.configure(
-            state=tk.NORMAL if can_prev else tk.DISABLED)
+            state=tk.NORMAL if can_prev else tk.DISABLED,
+            fg=TEXT_PRI if can_prev else TEXT_DIM)
         self._btn_next.configure(
-            state=tk.NORMAL if can_next else tk.DISABLED)
+            state=tk.NORMAL if can_next else tk.DISABLED,
+            bg=ACCENT if can_next else '#2a1a25',
+            fg='#fff' if can_next else TEXT_DIM)

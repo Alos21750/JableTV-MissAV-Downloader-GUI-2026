@@ -33,11 +33,11 @@ SUCCESS   = '#4ade80'
 WARNING   = '#fbbf24'
 ERROR_C   = '#f87171'
 
-FONT      = ('Microsoft YaHei', 10)
-FONT_SM   = ('Microsoft YaHei', 9)
-FONT_MONO = ('Consolas', 9)
-FONT_TITLE = ('Microsoft YaHei', 13, 'bold')
-FONT_SEC_TITLE = ('Microsoft YaHei', 10, 'bold')
+FONT      = ('Microsoft YaHei', 11)
+FONT_SM   = ('Microsoft YaHei', 10)
+FONT_MONO = ('Consolas', 10)
+FONT_TITLE = ('Microsoft YaHei', 14, 'bold')
+FONT_SEC_TITLE = ('Microsoft YaHei', 11, 'bold')
 
 MAX_CONCURRENT = 10
 
@@ -478,6 +478,8 @@ class MainWindow(tk.Tk):
             side=tk.RIGHT, padx=(6, 0))
         _btn(bar, '清除訊息', self._clear_console).pack(
             side=tk.RIGHT, padx=4)
+        _btn(bar, '📂 開啟資料夾', self._open_dest_folder).pack(
+            side=tk.RIGHT, padx=4)
 
         # ── Status bar ────────────────────────────────────────────
         tk.Frame(parent, bg=DIVIDER, height=1).pack(fill='x')
@@ -535,6 +537,13 @@ class MainWindow(tk.Tk):
         d = tkinter.filedialog.askdirectory()
         if d:
             self._dest_var.set(d)
+
+    def _open_dest_folder(self):
+        dest = self._dest_var.get() or 'download'
+        folder = os.path.abspath(dest)
+        if not os.path.isdir(folder):
+            os.makedirs(folder, exist_ok=True)
+        os.startfile(folder)
 
     def _add_url(self, url, show_msg=True):
         if not M3U8Sites.VaildateUrl(url):

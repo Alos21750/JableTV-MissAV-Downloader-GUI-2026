@@ -38,8 +38,8 @@ class SiteMissAV(M3U8Crawler):
     #   https://missav.ai/sone-543
     # Does NOT match:
     #   https://missav.ai/dm265/cn/chinese-subtitle  (category listing)
-    website_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-]+)|https://(?:www\.)?missav\.(?:ai|ws)/([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
-    website_dirname_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:(?:cn|en|ja|ko|ms|th)/)?([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
+    website_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-]+)|https://(?:www\.)?missav\.(?:ai|ws)/([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
+    website_dirname_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-z]{2,5}-\d+[a-zA-Z0-9\-]*)'
 
     def get_url_infos(self):
         scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
