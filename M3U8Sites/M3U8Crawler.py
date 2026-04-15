@@ -96,6 +96,7 @@ class M3U8Crawler:
         self._t_future = None
         self._t2_executor = None
         self._cancel_job = None
+        self._extra_headers = {}   # subclass may set (e.g. Referer)
         self._dirName = None
         self._dest_folder = None
         self._temp_folder = None
@@ -159,23 +160,32 @@ class M3U8Crawler:
         if self._imageUrl is None: return True
         return os.path.exists(self._get_image_savename())
 
+    def _m3u8_headers(self):
+        """Merged headers for m3u8 and segment requests."""
+        return {**headers, **self._extra_headers}
+
     def _getm3u8PlayList(self, uri):
         m3u8urlPath = self._m3u8url.split('/')
         if uri.startswith('/'): m3u8urlPath = m3u8urlPath[:3]
         else: m3u8urlPath.pop(-1)
-        downloadurl = '/'.join(m3u8urlPath)
-        playListUrl = downloadurl + '/' + uri.lstrip('/')
-        m3u8obj = m3u8.load(playListUrl)
-        return m3u8obj, downloadurl
+        baseurl = '/'.join(m3u8urlPath)
+        playListUrl = baseurl + '/' + uri.lstrip('/')
+        m3u8obj = m3u8.load(playListUrl, headers=self._m3u8_headers())
+        # Segments are relative to the variant playlist, not the master
+        variantBase = playListUrl.rsplit('/', 1)[0] + '/'
+        return m3u8obj, variantBase
 
     def _create_m3u8(self):
         m3u8urlList = self._m3u8url.split('/')
         m3u8urlList.pop(-1)
         downloadurl = '/'.join(m3u8urlList) + '/'
 
-        m3u8obj = m3u8.load(self._m3u8url)
+        m3u8obj = m3u8.load(self._m3u8url, headers=self._m3u8_headers())
         if len(m3u8obj.playlists) > 0:
-            m3u8obj, downloadurl = self._getm3u8PlayList(m3u8obj.playlists[0].uri)
+            # Pick highest quality variant
+            best = max(m3u8obj.playlists,
+                       key=lambda p: p.stream_info.bandwidth if p.stream_info else 0)
+            m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
         self._key_content = None
@@ -186,7 +196,7 @@ class M3U8Crawler:
                 m3u8_key_uri = key.uri
                 if not m3u8_key_uri.startswith('http'):
                     m3u8_key_uri = downloadurl + m3u8_key_uri
-                resp = _get_session().get(m3u8_key_uri, headers=headers, timeout=15)
+                resp = _get_session().get(m3u8_key_uri, headers=self._m3u8_headers(), timeout=15)
                 self._key_content = resp.content
                 self._key_method = getattr(key, 'method', 'AES-128')
                 self._key_iv = getattr(key, 'iv', None)
@@ -266,7 +276,7 @@ class M3U8Crawler:
 
         try:
             session = _get_session()
-            response = session.get(url, headers=headers, timeout=20)
+            response = session.get(url, headers=self._m3u8_headers(), timeout=20)
             if response.status_code != 200:
                 return False
             content_ts = response.content

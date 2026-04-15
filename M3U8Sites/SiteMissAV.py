@@ -54,6 +54,10 @@ class SiteMissAV(M3U8Crawler):
 
     def get_url_infos(self):
         import time
+        self._extra_headers = {
+            'Referer': 'https://missav.ai/',
+            'Origin': 'https://missav.ai',
+        }
         scraper = self._get_scraper()
         last_exc = None
         for attempt in range(3):
