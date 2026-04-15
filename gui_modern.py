@@ -49,6 +49,9 @@ class DownloadManager:
         self._active: dict[str, object] = {}
         self._items: dict[str, DownloadItem] = {}
         self._lock = threading.Lock()
+        # Gate: only 1 item can query the site at a time (prevents
+        # CloudFlare rate-limiting when many downloads are queued)
+        self._prep_sem = threading.Semaphore(1)
 
     @property
     def active_count(self):
@@ -132,7 +135,13 @@ class DownloadManager:
     def _run(self, url: str, dest: str):
         self._set_state(url, '準備中')
         try:
-            job = M3U8Sites.CreateSite(url, dest)
+            # Serialize preparation: only one item queries the site at a
+            # time to avoid CloudFlare rate-limiting on bulk downloads.
+            self._prep_sem.acquire()
+            try:
+                job = M3U8Sites.CreateSite(url, dest)
+            finally:
+                self._prep_sem.release()
             if not job or not job.is_url_vaildate():
                 with self._lock:
                     self._active.pop(url, None)
