@@ -28,6 +28,7 @@ SUCCESS   = '#4ade80'
 
 MIN_CARD_W = 290    # minimum card width — gives 4 columns at 1340px (matches website layout)
 CARD_PAD  = 8
+SIDEBAR_W = 170     # sidebar width in pixels (before DPI scaling)
 
 
 def _truncate(text, n=68):
@@ -253,12 +254,35 @@ class BrowsePanel(tk.Frame):
             state=tk.DISABLED)
         self._btn_addsel.pack(side=tk.RIGHT, padx=(0, 4))
 
+        # Sidebar toggle button
+        self._sidebar_visible = True
+        self._btn_sidebar = tk.Button(
+            top, text='☰ 標籤', bg=BG_CARD, fg=TEXT_SEC,
+            activebackground='#2a2a4a', activeforeground=TEXT_PRI,
+            relief='flat', font=('', 9), padx=8, pady=3, bd=0,
+            command=self._toggle_sidebar, cursor='hand2')
+        self._btn_sidebar.pack(side=tk.RIGHT, padx=(0, 8))
+
         # ── Divider ──────────────────────────────────────────────
         tk.Frame(self, bg=DIVIDER, height=1).pack(fill='x')
 
-        # ── Scrollable grid ──────────────────────────────────────
-        grid_outer = tk.Frame(self, bg=BG)
-        grid_outer.pack(fill='both', expand=True)
+        # ── Content area: sidebar + grid ─────────────────────────
+        content = tk.Frame(self, bg=BG)
+        content.pack(fill='both', expand=True)
+
+        # ── Sidebar (left) ───────────────────────────────────────
+        sidebar_w = int(SIDEBAR_W * self._dpi_scale)
+        self._sidebar = tk.Frame(content, bg='#0a0a16', width=sidebar_w)
+        self._sidebar.pack(side=tk.LEFT, fill='y')
+        self._sidebar.pack_propagate(False)
+        self._build_sidebar()
+
+        # Sidebar / grid divider
+        tk.Frame(content, bg=BORDER, width=1).pack(side=tk.LEFT, fill='y')
+
+        # ── Scrollable grid (right) ──────────────────────────────
+        grid_outer = tk.Frame(content, bg=BG)
+        grid_outer.pack(side=tk.LEFT, fill='both', expand=True)
 
         self._canvas = tk.Canvas(grid_outer, bg=BG, highlightthickness=0, bd=0)
         self._vsb = ttk.Scrollbar(grid_outer, orient=tk.VERTICAL,
@@ -325,6 +349,153 @@ class BrowsePanel(tk.Frame):
 
         self._update_nav()
 
+    # ── Sidebar ──────────────────────────────────────────────────────────
+
+    def _build_sidebar(self):
+        """Build the scrollable sidebar with collapsible tag groups."""
+        # Sidebar header
+        hdr = tk.Frame(self._sidebar, bg='#0e0e20', pady=6)
+        hdr.pack(fill='x')
+        tk.Label(hdr, text='標籤選片', bg='#0e0e20', fg=ACCENT,
+                 font=('Microsoft YaHei', 10, 'bold')).pack(padx=10, anchor='w')
+
+        tk.Frame(self._sidebar, bg=BORDER, height=1).pack(fill='x')
+
+        # Scrollable area
+        sb_canvas = tk.Canvas(self._sidebar, bg='#0a0a16',
+                              highlightthickness=0, bd=0)
+        sb_scroll = ttk.Scrollbar(self._sidebar, orient=tk.VERTICAL,
+                                  command=sb_canvas.yview)
+        sb_canvas.configure(yscrollcommand=sb_scroll.set)
+        sb_scroll.pack(side=tk.RIGHT, fill='y')
+        sb_canvas.pack(side=tk.LEFT, fill='both', expand=True)
+
+        self._sb_inner = tk.Frame(sb_canvas, bg='#0a0a16')
+        sb_canvas.create_window((0, 0), window=self._sb_inner, anchor='nw')
+        self._sb_inner.bind('<Configure>',
+                            lambda _: sb_canvas.configure(
+                                scrollregion=sb_canvas.bbox('all')))
+        sb_canvas.bind('<MouseWheel>',
+                       lambda e: sb_canvas.yview_scroll(
+                           int(-1 * (e.delta / 120)), 'units'))
+        self._sb_inner.bind('<MouseWheel>',
+                            lambda e: sb_canvas.yview_scroll(
+                                int(-1 * (e.delta / 120)), 'units'))
+        self._sb_canvas = sb_canvas
+        self._sb_tag_frames = {}
+        self._sb_expanded = {}
+
+        self._populate_sidebar_tags()
+
+    def _populate_sidebar_tags(self):
+        """Populate sidebar with tag groups from JableTVBrowser."""
+        for w in self._sb_inner.winfo_children():
+            w.destroy()
+        self._sb_tag_frames.clear()
+        self._sb_expanded.clear()
+
+        if self._site_key != 'JableTV':
+            tk.Label(self._sb_inner, text='僅 JableTV 支援\n標籤瀏覽',
+                     bg='#0a0a16', fg=TEXT_DIM,
+                     font=('Microsoft YaHei', 9), justify='center'
+                     ).pack(pady=40, padx=10)
+            return
+
+        tags = JableTVBrowser.fetch_sidebar_tags()
+        for group_name, tag_list in tags.items():
+            self._sb_expanded[group_name] = False
+
+            # Container for header + tags (keeps them together)
+            container = tk.Frame(self._sb_inner, bg='#0a0a16')
+            container.pack(fill='x', pady=(1, 0))
+
+            # Group header (clickable to expand/collapse)
+            ghdr = tk.Frame(container, bg='#0e0e20', cursor='hand2')
+            ghdr.pack(fill='x')
+            arrow = tk.Label(ghdr, text='▸', bg='#0e0e20', fg=TEXT_DIM,
+                             font=('', 8))
+            arrow.pack(side=tk.LEFT, padx=(8, 2))
+            lbl = tk.Label(ghdr, text=group_name, bg='#0e0e20', fg=TEXT_SEC,
+                           font=('Microsoft YaHei', 9, 'bold'), anchor='w')
+            lbl.pack(side=tk.LEFT, padx=(0, 4), fill='x', expand=True)
+            cnt = tk.Label(ghdr, text=str(len(tag_list)), bg='#0e0e20',
+                           fg=TEXT_DIM, font=('', 8))
+            cnt.pack(side=tk.RIGHT, padx=(0, 8))
+
+            # Tag buttons container (initially hidden — inside container)
+            tag_frame = tk.Frame(container, bg='#0a0a16')
+            self._sb_tag_frames[group_name] = (tag_frame, arrow)
+
+            for tag in tag_list:
+                btn = tk.Label(tag_frame, text=tag['name'], bg='#0a0a16',
+                               fg=TEXT_SEC, font=('Microsoft YaHei', 9),
+                               cursor='hand2', padx=20, pady=2, anchor='w')
+                btn.pack(fill='x')
+                tag_url = tag['url']
+                btn.bind('<Button-1>',
+                         lambda _e, u=tag_url, n=tag['name']:
+                         self._on_tag_click(u, n))
+                btn.bind('<Enter>',
+                         lambda _e, b=btn: b.configure(bg='#1a1a30', fg=ACCENT))
+                btn.bind('<Leave>',
+                         lambda _e, b=btn: b.configure(bg='#0a0a16', fg=TEXT_SEC))
+                btn.bind('<MouseWheel>',
+                         lambda e: self._sb_canvas.yview_scroll(
+                             int(-1 * (e.delta / 120)), 'units'))
+
+            # Bind toggle on header
+            for w in (ghdr, arrow, lbl, cnt):
+                w.bind('<Button-1>',
+                       lambda _e, g=group_name: self._toggle_tag_group(g))
+                w.bind('<MouseWheel>',
+                       lambda e: self._sb_canvas.yview_scroll(
+                           int(-1 * (e.delta / 120)), 'units'))
+
+    def _toggle_tag_group(self, group_name):
+        """Expand or collapse a sidebar tag group."""
+        frame, arrow = self._sb_tag_frames[group_name]
+        if self._sb_expanded.get(group_name, False):
+            frame.pack_forget()
+            arrow.configure(text='▸')
+            self._sb_expanded[group_name] = False
+        else:
+            # Pack after the header (which is sibling inside same container)
+            frame.pack(fill='x', after=frame.master.winfo_children()[0])
+            arrow.configure(text='▾')
+            self._sb_expanded[group_name] = True
+
+    def _toggle_sidebar(self):
+        """Show/hide the sidebar."""
+        if self._sidebar_visible:
+            self._sidebar.pack_forget()
+            self._sidebar_visible = False
+            self._btn_sidebar.configure(fg=TEXT_DIM)
+        else:
+            # Re-pack sidebar before the grid
+            content = self._sidebar.master
+            children = list(content.winfo_children())
+            for c in children:
+                c.pack_forget()
+            self._sidebar.pack(side=tk.LEFT, fill='y')
+            for c in children:
+                if c is not self._sidebar:
+                    if c.cget('bg') == BORDER and c.winfo_reqwidth() <= 2:
+                        c.pack(side=tk.LEFT, fill='y')
+                    else:
+                        c.pack(side=tk.LEFT, fill='both', expand=True)
+            self._sidebar_visible = True
+            self._btn_sidebar.configure(fg=TEXT_SEC)
+
+    def _on_tag_click(self, url, name):
+        """Navigate to a tag URL from the sidebar."""
+        self._current_base_url = url
+        self._page = 1
+        self._has_next = True
+        self._selected_urls.clear()
+        self._update_sel()
+        self._cat_var.set(f'🏷 {name}')
+        self._trigger_load()
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _browser(self):
@@ -352,6 +523,7 @@ class BrowsePanel(tk.Frame):
         self._selected_urls.clear()
         self._update_sel()
         self._set_status('載入分類中...')
+        self._populate_sidebar_tags()
         self._start_cat_load()
 
     def _on_cat_change(self, _e=None):

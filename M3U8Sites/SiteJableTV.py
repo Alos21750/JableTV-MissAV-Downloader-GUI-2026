@@ -144,6 +144,99 @@ class JableTVBrowser:
     _url_root = 'https://jable.tv'
     _scraper = None
 
+    # ── Homepage sections (prepended to category list) ───────────────────
+    HOMEPAGE_SECTIONS = [
+        ('最近更新', 'https://jable.tv/latest-updates/'),
+        ('熱門影片', 'https://jable.tv/hot/'),
+        ('新片上架', 'https://jable.tv/new-release/'),
+    ]
+
+    # ── Hot section time filters ─────────────────────────────────────────
+    HOT_TIME_FILTERS = {
+        '所有時間': '',
+        '今日熱門': 't=today',
+        '本週熱門': 't=week',
+        '本月熱門': 't=month',
+    }
+
+    # ── Sidebar tags (mirrors jable.tv left sidebar) ─────────────────────
+    SIDEBAR_TAGS = {
+        '衣著': [
+            ('黑絲', 'black-pantyhose'), ('過膝襪', 'knee-socks'),
+            ('運動裝', 'sportswear'), ('肉絲', 'flesh-toned-pantyhose'),
+            ('絲襪', 'pantyhose'), ('眼鏡娘', 'glasses'),
+            ('獸耳', 'kemonomimi'), ('漁網', 'fishnets'),
+            ('水着', 'swimsuit'), ('校服', 'school-uniform'),
+            ('旗袍', 'cheongsam'), ('婚紗', 'wedding-dress'),
+            ('女僕', 'maid'), ('和服', 'kimono'),
+            ('吊帶襪', 'stockings'), ('兔女郎', 'bunny-girl'),
+            ('Cosplay', 'Cosplay'),
+        ],
+        '身材': [
+            ('黑肉', 'suntan'), ('長身', 'tall'),
+            ('軟體', 'flexible-body'), ('貧乳', 'small-tits'),
+            ('美腿', 'beautiful-leg'), ('美尻', 'beautiful-butt'),
+            ('紋身', 'tattoo'), ('短髮', 'short-hair'),
+            ('白虎', 'hairless-pussy'), ('熟女', 'mature-woman'),
+            ('巨乳', 'big-tits'), ('少女', 'girl'),
+            ('嬌小', 'dainty'),
+        ],
+        '交合': [
+            ('顏射', 'facial'), ('腳交', 'footjob'),
+            ('肛交', 'anal-sex'), ('痙攣', 'spasms'),
+            ('潮吹', 'squirting'), ('深喉', 'deep-throat'),
+            ('接吻', 'kiss'), ('口爆', 'cum-in-mouth'),
+            ('口交', 'blowjob'), ('乳交', 'tit-wank'),
+            ('中出', 'creampie'),
+        ],
+        '玩法': [
+            ('露出', 'outdoor'), ('集團進犯', 'gang-intrusion'),
+            ('進犯', 'intrusion'), ('調教', 'tune'),
+            ('綑綁', 'bondage'), ('瞬間插入', 'quickie'),
+            ('痴漢', 'chikan'), ('痴女', 'chizyo'),
+            ('男M', 'masochism-guy'), ('泥醉', 'crapulence'),
+            ('泡姬', 'soapland'), ('母乳', 'breast-milk'),
+            ('放尿', 'piss'), ('按摩', 'massage'),
+            ('多P', 'groupsex'), ('刑具', 'grip'),
+            ('凌辱', 'insult'), ('一日十回', '10-times-a-day'),
+            ('3P', '3p'),
+        ],
+        '劇情': [
+            ('黑人', 'black'), ('醜男', 'ugly-man'),
+            ('誘惑', 'temptation'), ('親屬', 'kinship'),
+            ('童貞', 'virginity'), ('時間停止', 'time-stop'),
+            ('復仇', 'avenge'), ('年齡差', 'age-difference'),
+            ('巨漢', 'giant'), ('媚藥', 'love-potion'),
+            ('夫目前犯', 'sex-beside-husband'), ('出軌', 'affair'),
+            ('催眠', 'hypnosis'), ('偷拍', 'private-cam'),
+            ('下雨天', 'rainy-day'), ('NTR', 'ntr'),
+        ],
+        '角色': [
+            ('風俗娘', 'club-hostess-and-sex-worker'), ('醫生', 'doctor'),
+            ('逃犯', 'fugitive'), ('護士', 'nurse'),
+            ('老師', 'teacher'), ('空姐', 'flight-attendant'),
+            ('球隊經理', 'team-manager'), ('未亡人', 'widow'),
+            ('搜查官', 'detective'), ('情侶', 'couple'),
+            ('家政婦', 'housewife'), ('家庭教師', 'private-teacher'),
+            ('偶像', 'idol'), ('人妻', 'wife'),
+            ('主播', 'female-anchor'), ('OL', 'ol'),
+        ],
+        '地點': [
+            ('魔鏡號', 'magic-mirror'), ('電車', 'tram'),
+            ('處女', 'first-night'), ('監獄', 'prison'),
+            ('溫泉', 'hot-spring'), ('洗浴場', 'bathing-place'),
+            ('泳池', 'swimming-pool'), ('汽車', 'car'),
+            ('廁所', 'toilet'), ('學校', 'school'),
+            ('圖書館', 'library'), ('健身房', 'gym-room'),
+            ('便利店', 'store'),
+        ],
+        '雜項': [
+            ('錄像', 'video-recording'), ('處女作/引退作', 'debut-retires'),
+            ('綜藝', 'variety-show'), ('節日主題', 'festival'),
+            ('感謝祭', 'thanksgiving'), ('4小時以上', 'more-than-4-hours'),
+        ],
+    }
+
     @classmethod
     def _get_scraper(cls):
         if cls._scraper is None:
@@ -151,12 +244,19 @@ class JableTVBrowser:
         return cls._scraper
 
     @classmethod
+    def tag_url(cls, slug):
+        return f'{cls._url_root}/tags/{slug}/'
+
+    @classmethod
     def fetch_categories(cls):
+        """Return homepage sections + dynamic categories from /categories/."""
+        cats = [{'name': name, 'url': url, 'count': 0, 'section': True}
+                for name, url in cls.HOMEPAGE_SECTIONS]
         try:
             r = cls._get_scraper().get(f'{cls._url_root}/categories/', timeout=30)
-            if r.status_code != 200: return []
+            if r.status_code != 200:
+                return cats
             soup = BeautifulSoup(r.content, 'html.parser')
-            cats = []
             for a in soup.select('a[href*="/categories/"]'):
                 href = a.get('href', '')
                 text = a.get_text(strip=True)
@@ -167,9 +267,9 @@ class JableTVBrowser:
                     name = re.sub(r'\d[\d,]*\s*部影片', '', name).strip()
                     slug = href.rstrip('/').split('/')[-1]
                     cats.append({'name': name, 'slug': slug, 'url': href, 'count': count})
-            return cats
         except Exception:
-            return []
+            pass
+        return cats
 
     @classmethod
     def fetch_page(cls, url):
@@ -196,3 +296,12 @@ class JableTVBrowser:
             return videos
         except Exception:
             return []
+
+    @classmethod
+    def fetch_sidebar_tags(cls):
+        """Return the sidebar tag structure for the browse UI."""
+        result = {}
+        for group, tags in cls.SIDEBAR_TAGS.items():
+            result[group] = [{'name': name, 'slug': slug,
+                              'url': cls.tag_url(slug)} for name, slug in tags]
+        return result
