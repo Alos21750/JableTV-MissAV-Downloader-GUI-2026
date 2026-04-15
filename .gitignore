@@ -4,7 +4,8 @@
 .idea/
 build/
 build_tmp/
-release/
+release/*
+!release/*.exe
 download/
 MakeEXE.bat
 desktop.ini
