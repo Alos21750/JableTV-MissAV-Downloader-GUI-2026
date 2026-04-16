@@ -7,7 +7,7 @@ import re
 
 
 def get_parser():
-    parser = argparse.ArgumentParser(description="Jable TV Downloader")
+    parser = argparse.ArgumentParser(description="JableTV & MissAV Downloader — by ALOS")
     parser.add_argument("--random", type=bool, default=False,
                         help="Enter True for download random ")
     parser.add_argument("--url", type=str, default="",

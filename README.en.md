@@ -6,6 +6,7 @@
 </p>
 
 <h1 align="center">JableTV & MissAV Downloader GUI 2026</h1>
+<p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
   <a href="./README.md">繁體中文</a> ｜ English
@@ -111,6 +112,10 @@ python main.py -nogui True
 ## Credits
 
 Based on [hcjohn463/JableDownload](https://github.com/hcjohn463/JableDownload) and [AlfredoUen/JableTV](https://github.com/AlfredoUen/JableTV).
+
+## Author
+
+**ALOS** — [GitHub](https://github.com/Alos21750)
 
 ## License
 
