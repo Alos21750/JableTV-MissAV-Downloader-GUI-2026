@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d0d18;
+      color: #f0f0f8;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .header h1 {
+      font-size: 15px;
+      color: #e94560;
+      font-weight: 700;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: #161630;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .dot.online { background: #4ade80; }
+    .dot.offline { background: #f87171; }
+    .url-box {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #2a2a48;
+      background: #101020;
+      color: #f0f0f8;
+      font-size: 12px;
+      margin-bottom: 10px;
+      outline: none;
+    }
+    .url-box:focus { border-color: #e94560; }
+    .btn {
+      width: 100%;
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      background: #e94560;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-bottom: 6px;
+    }
+    .btn:hover { background: #d63451; }
+    .btn:disabled { background: #444; cursor: not-allowed; }
+    .btn.secondary {
+      background: #2a2a48;
+    }
+    .btn.secondary:hover { background: #3a3a58; }
+    .msg {
+      font-size: 11px;
+      color: #a0a0c0;
+      text-align: center;
+      margin-top: 6px;
+    }
+    .msg.ok { color: #4ade80; }
+    .msg.err { color: #f87171; }
+    .divider {
+      border: none;
+      border-top: 1px solid #222240;
+      margin: 10px 0;
+    }
+    .info {
+      font-size: 11px;
+      color: #666688;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>JableTV Downloader</h1>
+  </div>
+
+  <div class="status" id="status">
+    <div class="dot" id="dot"></div>
+    <span id="status-text">Checking...</span>
+  </div>
+
+  <input class="url-box" id="url" type="text" placeholder="Video URL..." />
+  <button class="btn" id="send-btn" disabled>Send to Downloader</button>
+  <button class="btn secondary" id="page-btn">Send Current Page</button>
+
+  <div class="msg" id="msg"></div>
+
+  <hr class="divider" />
+  <div class="info">App must be running on localhost:8088</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

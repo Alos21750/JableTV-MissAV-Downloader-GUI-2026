@@ -19,6 +19,8 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from nicegui import ui, app, events
 
 import M3U8Sites
@@ -352,8 +354,8 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
         }
         .tag-btn {
             color: #a0a0c0;
-            font-size: 13px;
-            padding: 4px 12px 4px 20px;
+            font-size: 12px;
+            padding: 3px 6px 3px 14px;
             cursor: pointer;
             transition: background 0.15s, color 0.15s;
             user-select: none;
@@ -361,7 +363,7 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
         .tag-btn:hover { background: #1a1a30; color: #e94560; }
         .group-header {
             background: #0e0e20;
-            padding: 6px 10px;
+            padding: 4px 8px;
             cursor: pointer;
             display: flex;
             align-items: center;
@@ -742,12 +744,12 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
 
         with ui.left_drawer(value=True, bordered=True).classes(
                 'px-0 py-0').style(
-                'width: 160px; background: #0a0a16;') as drawer:
+                'width: 120px; background: #0a0a16;') as drawer:
             # Sidebar header
             with ui.element('div').style(
-                    'background: #0e0e20; padding: 12px 14px;'):
+                    'background: #0e0e20; padding: 8px 10px;'):
                 ui.label('標籤選片').style(
-                    f'color: {ACCENT}; font-size: 14px; font-weight: bold;')
+                    f'color: {ACCENT}; font-size: 13px; font-weight: bold;')
             ui.separator().style('background: #2a2a48;')
             sidebar_container_ref = ui.column().classes('w-full gap-0')
 
@@ -939,6 +941,43 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
 
     # ── Save on shutdown ─────────────────────────────────────────
     app.on_shutdown(lambda: dlmgr.save_csv(CSV_PATH))
+
+    # ── Chrome extension API endpoints ───────────────────────────
+    from starlette.middleware.cors import CORSMiddleware
+    app.add_middleware(CORSMiddleware,
+                       allow_origins=['*'],
+                       allow_methods=['GET', 'POST', 'OPTIONS'],
+                       allow_headers=['*'])
+
+    @app.get('/_nicegui/api/status')
+    async def api_status():
+        items = dlmgr.get_items()
+        active = sum(1 for i in items if i.state == '下載中')
+        return JSONResponse({'status': 'ok', 'active': active,
+                             'total': len(items)})
+
+    @app.post('/_nicegui/api/download')
+    async def api_download(request: Request):
+        body = await request.json()
+        url = body.get('url', '').strip()
+        if not url or not M3U8Sites.VaildateUrl(url):
+            return JSONResponse({'error': 'invalid url'}, status_code=400)
+        dlmgr.add_item(url, state='等待中')
+        dlmgr.enqueue(url, state.dest)
+        return JSONResponse({'ok': True})
+
+    @app.post('/_nicegui/api/download-batch')
+    async def api_download_batch(request: Request):
+        body = await request.json()
+        urls = body.get('urls', [])
+        added = 0
+        for url in urls:
+            url = url.strip()
+            if url and M3U8Sites.VaildateUrl(url):
+                dlmgr.add_item(url, state='等待中')
+                dlmgr.enqueue(url, state.dest)
+                added += 1
+        return JSONResponse({'ok': True, 'added': added})
 
     ui.run(
         title='JableTV & MissAV Downloader',
