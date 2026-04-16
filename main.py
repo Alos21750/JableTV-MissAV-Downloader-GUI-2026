@@ -1,4 +1,4 @@
-# author: Alfredo 26/Dec/2021
+# author: ALOS (Alos21750)
 #!/usr/bin/env python
 # coding: utf-8
 

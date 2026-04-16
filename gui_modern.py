@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Modern GUI for JableTV & MissAV Downloader — built with NiceGUI (Quasar/Vue)."""
+"""Modern GUI for JableTV & MissAV Downloader by ALOS — built with NiceGUI (Quasar/Vue)."""
 
 import os
 import sys
@@ -739,7 +739,7 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
             ui.label('JableTV & MissAV Downloader').classes(
                 'text-lg font-bold').style(f'color: {ACCENT};')
             ui.space()
-            ui.label('v2.0 Modern UI').classes('text-xs').style(
+            ui.label('by ALOS  •  v2.0').classes('text-xs').style(
                 'color: #666688;')
 
         with ui.left_drawer(value=True, bordered=True).classes(
@@ -925,6 +925,8 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
                                                     ).style('color: #a0a0c0;')
                             ui.label('JableTV & MissAV Downloader').style(
                                 'color: #f0f0f8;')
+                            ui.label('by ALOS (Alos21750)').style(
+                                'color: #e94560; font-size: 12px;')
                             ui.label(
                                 'v2.0.0 Modern UI  •  僅供學習與研究用途'
                             ).style('color: #a0a0c0; font-size: 12px;')
@@ -980,7 +982,7 @@ def gui_modern_main(url: str = '', dest: str = 'download'):
         return JSONResponse({'ok': True, 'added': added})
 
     ui.run(
-        title='JableTV & MissAV Downloader',
+        title='JableTV & MissAV Downloader — by ALOS',
         port=8088,
         reload=False,
         show=True,

@@ -443,7 +443,7 @@ class MainWindow(tk.Tk):
 
     def __init__(self, dest='download', url=''):
         super().__init__()
-        self.title('JableTV & MissAV Downloader')
+        self.title('JableTV & MissAV Downloader — by ALOS')
         self.minsize(980, 660)
         self.configure(bg=BG)
         # Start maximized; geometry is fallback if zoomed fails
@@ -664,7 +664,7 @@ class MainWindow(tk.Tk):
 
         tk.Label(grp2, text='JableTV & MissAV Downloader GUI',
                  bg=BG_SECTION, fg=TEXT_PRI, font=FONT).pack(anchor='w')
-        tk.Label(grp2, text='v1.0.0-beta  •  僅供學習與研究用途',
+        tk.Label(grp2, text='by ALOS  •  v1.0.0  •  僅供學習與研究用途',
                  bg=BG_SECTION, fg=TEXT_SEC, font=FONT_SM).pack(anchor='w', pady=(4, 0))
         tk.Label(grp2,
                  text='GitHub: Alos21750/JableTV-MissAV-Downloader-GUI-2026',

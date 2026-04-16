@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "JableTV Downloader",
+  "name": "JableTV Downloader by ALOS",
   "version": "1.0.0",
-  "description": "Send JableTV & MissAV video URLs to the local downloader app",
+  "description": "Send JableTV & MissAV video URLs to the local downloader app — by ALOS",
   "permissions": ["contextMenus", "activeTab", "storage"],
   "host_permissions": [
     "http://localhost:8088/*"
