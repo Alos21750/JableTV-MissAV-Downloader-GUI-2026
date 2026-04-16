@@ -12,6 +12,13 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Optional
 
+# PyInstaller GUI-mode (console=False) sets sys.stdout/stderr to None,
+# which crashes uvicorn's logging setup (calls .isatty() on None).
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
+
 from nicegui import ui, app, events
 
 import M3U8Sites
