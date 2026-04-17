@@ -171,20 +171,57 @@ class SmallToolWorker:
                 waited += 5
         self._log('Worker stopped.')
 
-    @staticmethod
-    def _parse_relative_date(rel_text: str, now: Optional[datetime] = None) -> Optional[datetime]:
-        """Parse jable.tv's relative time strings (e.g. '5 小時前', '3 個月前').
+    # Chinese numerals → int. Covers the range jable.tv actually emits
+    # (relative-time counts are small; '十一' = 11 is enough).
+    _CN_NUMS = {
+        '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+    }
 
+    @classmethod
+    def _parse_cn_number(cls, s: str) -> Optional[int]:
+        """Parse a small Chinese number literal like '一', '十', '十二', '二十'."""
+        if not s:
+            return None
+        if '十' in s:
+            # 十 = 10; 十X = 1X; X十 = X0; X十Y = XY
+            parts = s.split('十')
+            left = parts[0]
+            right = parts[1] if len(parts) > 1 else ''
+            tens = cls._CN_NUMS.get(left, 1) if left else 1
+            ones = cls._CN_NUMS.get(right, 0) if right else 0
+            return tens * 10 + ones
+        if len(s) == 1 and s in cls._CN_NUMS:
+            return cls._CN_NUMS[s]
+        return None
+
+    @classmethod
+    def _parse_relative_date(cls, rel_text: str, now: Optional[datetime] = None) -> Optional[datetime]:
+        """Parse jable.tv's relative time strings.
+
+        Handles Arabic ('5 小時前', '3 個月前') AND Chinese-numeral
+        ('一星期前', '兩個月前') variants, and both 星期/週/周 for week.
         Returns an absolute UTC datetime, or None if unparseable.
         """
         if not rel_text:
             return None
         if now is None:
             now = datetime.now(timezone.utc)
-        m = re.match(r'\s*(\d+)\s*(個)?\s*(分鐘|小時|天|週|個?月|個?年|周|月|年)\s*前', rel_text)
+        m = re.match(
+            r'\s*(\d+|[一二兩三四五六七八九十]+)'
+            r'\s*(個)?\s*'
+            r'(分鐘|小時|天|星期|週|周|個?月|個?年)\s*前',
+            rel_text,
+        )
         if not m:
             return None
-        n = int(m.group(1))
+        num_raw = m.group(1)
+        if num_raw.isdigit():
+            n = int(num_raw)
+        else:
+            n = cls._parse_cn_number(num_raw)
+            if n is None:
+                return None
         unit = m.group(3)
         if unit == '分鐘':
             delta = timedelta(minutes=n)
@@ -192,7 +229,7 @@ class SmallToolWorker:
             delta = timedelta(hours=n)
         elif unit == '天':
             delta = timedelta(days=n)
-        elif unit in ('週', '周'):
+        elif unit in ('星期', '週', '周'):
             delta = timedelta(weeks=n)
         elif unit in ('月', '個月'):
             delta = timedelta(days=n * 30)  # approximate
