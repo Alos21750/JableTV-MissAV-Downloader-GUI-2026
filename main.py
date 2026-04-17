@@ -16,7 +16,7 @@ except Exception:
 
 from args import *
 
-# Use modern NiceGUI by default; fall back to tkinter if unavailable
+# Use modern CustomTkinter GUI by default; fall back to basic tkinter if unavailable
 try:
     from gui_modern import gui_modern_main as _gui_main
     _USE_MODERN = True

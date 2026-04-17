@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Downloads-10_Parallel-00C853?style=for-the-badge" />
 </p>
 
-<h1 align="center">JableTV & MissAV Downloader GUI 2026</h1>
+<h1 align="center">JableTV & MissAV Downloader — Material Design 2026</h1>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
@@ -14,7 +14,7 @@
 
 ---
 
-## Screenshots
+## Screenshots (Native Material Design UI)
 
 ### JableTV Browse
 <p align="center">
@@ -26,7 +26,7 @@
   <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV Browse" />
 </p>
 
-### Download Manager
+### Download Manager (Live Progress Bars)
 <p align="center">
   <img src="./img/screenshot_download.png" width="800" alt="Download Manager" />
 </p>
@@ -38,21 +38,40 @@
 
 ---
 
-## Features
+## Two Tools
 
+This project ships two independent executables:
+
+| Tool | Purpose | Target user |
+|------|---------|-------------|
+| **JableTV_Modern.exe** | Full downloader — browse, search, multi-select, concurrent downloads | Anyone who wants to actively pick videos to download |
+| **Jable_smalltool.exe** | Daily auto-downloader for `中文字幕` (Chinese-subtitled) releases — set the folder once and leave it running | Anyone who wants a set-and-forget feed of the newest subtitled releases |
+
+## Features (JableTV_Modern.exe)
+
+- **Native Material Design UI** — Built with CustomTkinter, dark theme, no browser required
 - **Built-in Browser** — Browse video categories and search directly within the app, with full pagination
 - **Multi-Select Download** — Check multiple videos in the browse panel, send to download queue in one click
-- **10 Parallel Downloads** — Download up to 10 videos simultaneously; extras auto-queue
+- **Parallel Downloads (up to 10)** — Download up to 10 videos concurrently; configurable in Settings (default 2)
 - **Speed Rate Limiting** — Configurable bandwidth limit (1/2/5/10/15 MB/s or unlimited)
-- **Real-Time Progress** — Individual progress, speed & status for each download
+- **Real-Time Progress** — Per-item progress, speed & status (incremental UI updates — no flicker)
 - **Smart Clipboard** — Auto-detects video URLs copied to clipboard
 - **Import from File** — Batch-import URLs from `.txt` / `.csv` files
 - **Open Folder** — One-click to open the download destination folder
 - **Auto Merge** — Automatically merges TS segments into a complete MP4 after download
 - **Resume Support** — Cancelled downloads can be restarted; completed segments are preserved
 - **High DPI Support** — Automatically adapts to high-resolution displays for crisp UI
-- **Settings Tab** — Configure download speed, save location, and more
+- **Settings Tab** — Configure download speed, save location, and concurrency
 - **Portable Windows Build** — Pre-packaged `.exe`, no Python installation needed
+
+## Features (Jable_smalltool.exe)
+
+- **Set once, runs daily** — Pick the save folder once and the tool checks for new videos every 24 hours
+- **Focused on Chinese-subtitled** — Watches `jable.tv/tags/chinese-subtitle/` only
+- **Deduped by memory** — Already-seen URLs are stored in `.Jable_smalltool/seen.json` so nothing downloads twice
+- **First-run backfill** — Scans 3 pages the first time to catch the recent backlog; subsequent daily runs scan 2 pages
+- **Check-now button** — Don't want to wait 24 h? Trigger an immediate scan
+- **Background friendly** — Minimize to the taskbar and forget
 
 ## Supported Sites
 
@@ -66,7 +85,12 @@
 
 ### 🖥️ Windows Users (Recommended)
 
-Go to **[Releases](../../releases)** and download the latest `windowsGUI.exe`. Double-click to run — **no Python installation needed**.
+Go to **[Releases](../../releases)** and download:
+
+- **JableTV_Modern.exe** — Full downloader (~27 MB)
+- **Jable_smalltool.exe** — Chinese-subtitle daily auto-downloader (~21 MB)
+
+Double-click to run — **no Python installation needed**.
 
 ### 🐍 macOS / Linux / Other Platforms
 
@@ -77,10 +101,13 @@ python --version
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Launch GUI
+# 3. Launch the full downloader GUI
 python main.py
 
-# 4. CLI mode (optional)
+# 4. Launch the Chinese-subtitle daily auto-downloader
+python jable_smalltool.py
+
+# 5. CLI mode (optional)
 python main.py -nogui True
 ```
 

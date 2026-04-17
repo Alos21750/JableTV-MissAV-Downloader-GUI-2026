@@ -1,31 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 datas = []
 binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
-    # NiceGUI and its web stack
-    'nicegui', 'uvicorn', 'uvicorn.logging', 'uvicorn.loops',
-    'uvicorn.loops.auto', 'uvicorn.protocols',
-    'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
-    'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',
-    'uvicorn.lifespan', 'uvicorn.lifespan.on',
-    'fastapi', 'starlette', 'httptools', 'websockets',
-    'engineio', 'socketio', 'aiofiles', 'aiohttp',
-    'python_multipart', 'jinja2', 'markdown2',
-    'itsdangerous', 'anyio', 'httpx', 'httpcore',
-    'h11', 'wsproto', 'bidict',
+    'customtkinter',
 ]
 
-# Collect nicegui's static web assets (Quasar, Vue, etc.)
-for pkg in ['nicegui', 'cloudscraper', 'certifi']:
+# Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
+for pkg in ['cloudscraper', 'certifi', 'customtkinter']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# Collect submodules that PyInstaller misses
-for pkg in ['uvicorn', 'fastapi', 'starlette', 'engineio', 'socketio']:
-    hiddenimports += collect_submodules(pkg)
 
 
 a = Analysis(

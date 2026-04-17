@@ -269,9 +269,9 @@ class M3U8Crawler:
         fileName = url.split('/')[-1].rsplit('.', 1)[0]
         saveName = os.path.join(self._temp_folder, fileName + ".mp4")
         if os.path.exists(saveName):
+            # Segment already on disk (e.g. from a resumed job) — drop from pending
             with self._speed_lock:
-                if (url, seq_num) in self._pending_set:
-                    self._pending_set.discard((seq_num, url))
+                self._pending_set.discard((seq_num, url))
             return True
 
         try:

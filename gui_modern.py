@@ -1,27 +1,21 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Modern GUI for JableTV & MissAV Downloader by ALOS — built with NiceGUI (Quasar/Vue)."""
+"""Modern GUI for JableTV & MissAV Downloader by ALOS — CustomTkinter Material Design."""
 
 import os
 import sys
 import re
+import io
 import csv
 import time
 import threading
-import asyncio
-from dataclasses import dataclass, field
+import tkinter as tk
+from tkinter import filedialog, messagebox
 from typing import Optional
 
-# PyInstaller GUI-mode (console=False) sets sys.stdout/stderr to None,
-# which crashes uvicorn's logging setup (calls .isatty() on None).
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, 'w')
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, 'w')
-
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from nicegui import ui, app, events
+import customtkinter as ctk
+import requests
+from PIL import Image
 
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
@@ -30,122 +24,123 @@ from config import headers
 
 # ── Design tokens ────────────────────────────────────────────────────
 ACCENT = '#e94560'
+ACCENT_HOVER = '#c73350'
 ACCENT2 = '#7b61ff'
 SUCCESS = '#4ade80'
 WARNING = '#fbbf24'
 ERROR_C = '#f87171'
+BG_DARK = '#0d0d18'
+BG_CARD = '#161630'
+BG_INPUT = '#1c1c38'
+BG_HEADER = '#101020'
+BG_SECTION = '#131328'
+TEXT_PRI = '#f0f0f8'
+TEXT_SEC = '#a0a0c0'
+TEXT_DIM = '#666688'
+BORDER = '#2a2a48'
 
+DEFAULT_CONCURRENT = 2
 MAX_CONCURRENT = 10
 CSV_PATH = os.path.join(os.getcwd(), 'JableTV.csv')
 
+SITES = {
+    'JableTV': {'browser': JableTVBrowser},
+    'MissAV': {'browser': MissAVBrowser},
+}
 
-# ── Download state ───────────────────────────────────────────────────
-@dataclass
+
+# ── Download Manager ────────────────────────────────────────────────
 class DownloadItem:
-    url: str
-    name: str = ''
-    state: str = ''
-    progress: int = 0
-    speed: str = ''
+    __slots__ = ('url', 'name', 'state', 'progress', 'speed')
+
+    def __init__(self, url: str, name: str = '', state: str = ''):
+        self.url = url
+        self.name = name or url.rstrip('/').split('/')[-1]
+        self.state = state
+        self.progress = 0
+        self.speed = ''
 
 
 class DownloadManager:
-    """Manages concurrent downloads with queue and state tracking."""
+    """Thread-safe download manager with configurable concurrency."""
 
-    def __init__(self, on_update=None):
+    def __init__(self, on_update=None, max_concurrent: int = DEFAULT_CONCURRENT):
         self._on_update = on_update
         self._pending: list[tuple[str, str]] = []
         self._active: dict[str, object] = {}
         self._items: dict[str, DownloadItem] = {}
         self._lock = threading.Lock()
-        # Gate: only 1 item can query the site at a time (prevents
-        # CloudFlare rate-limiting when many downloads are queued)
+        self._max_concurrent = max_concurrent
         self._prep_sem = threading.Semaphore(1)
 
     @property
-    def active_count(self):
-        with self._lock:
-            return len(self._active)
+    def max_concurrent(self) -> int:
+        return self._max_concurrent
 
-    @property
-    def pending_count(self):
+    @max_concurrent.setter
+    def max_concurrent(self, value: int):
+        self._max_concurrent = max(1, min(value, MAX_CONCURRENT))
+        for _ in range(value):
+            self._try_next()
+
+    def add_item(self, url: str, name: str = '', state: str = ''):
         with self._lock:
-            return len(self._pending)
+            if url not in self._items:
+                self._items[url] = DownloadItem(url, name, state)
 
     def get_items(self) -> list[DownloadItem]:
         with self._lock:
             return list(self._items.values())
 
-    def add_item(self, url: str, name: str = '', state: str = '') -> None:
+    def remove_item(self, url: str):
         with self._lock:
-            if url not in self._items:
-                self._items[url] = DownloadItem(
-                    url=url,
-                    name=name or url.rstrip('/').split('/')[-1],
-                    state=state)
-                self._notify()
+            self._items.pop(url, None)
+            self._pending = [(u, d) for u, d in self._pending if u != url]
+            job = self._active.pop(url, None)
+        if job and hasattr(job, 'cancel_download'):
+            try:
+                job.cancel_download()
+            except Exception:
+                pass
 
-    def enqueue(self, url: str, dest: str) -> None:
+    def enqueue(self, url: str, dest: str):
         with self._lock:
             if url in self._active:
                 return
             if any(u == url for u, _ in self._pending):
                 return
-            if url not in self._items:
-                self._items[url] = DownloadItem(
-                    url=url, name=url.rstrip('/').split('/')[-1])
-            if len(self._active) < MAX_CONCURRENT:
+            if len(self._active) < self._max_concurrent:
                 self._active[url] = None
                 threading.Thread(target=self._run, args=(url, dest),
                                  daemon=True).start()
             else:
                 self._pending.append((url, dest))
-                self._items[url].state = '等待中'
-                self._notify()
+                self._set_state(url, '等待中')
 
     def cancel_all(self):
         with self._lock:
             for u, _ in self._pending:
-                if u in self._items:
-                    self._items[u].state = '已取消'
+                self._set_state(u, '已取消')
             self._pending.clear()
             jobs = list(self._active.items())
         for url, job in jobs:
-            if job:
+            if job and hasattr(job, 'cancel_download'):
                 try:
                     job.cancel_download()
                 except Exception:
                     pass
-            with self._lock:
-                if url in self._items:
-                    self._items[url].state = '已取消'
+            self._set_state(url, '已取消')
         with self._lock:
             self._active.clear()
-        self._notify()
 
-    def remove_item(self, url: str) -> None:
-        with self._lock:
-            self._pending = [(u, d) for u, d in self._pending if u != url]
-            self._items.pop(url, None)
-            job = self._active.pop(url, None)
-        if job:
-            try:
-                job.cancel_download()
-            except Exception:
-                pass
-        self._notify()
-
-    def clear_all(self) -> None:
+    def clear_all(self):
         self.cancel_all()
         with self._lock:
             self._items.clear()
-        self._notify()
 
     def _run(self, url: str, dest: str):
         self._set_state(url, '準備中')
         try:
-            # Serialize preparation: only one item queries the site at a
-            # time to avoid CloudFlare rate-limiting on bulk downloads.
             self._prep_sem.acquire()
             try:
                 job = M3U8Sites.CreateSite(url, dest)
@@ -161,14 +156,14 @@ class DownloadManager:
                 self._active[url] = job
             name = job.target_name() or ''
             self._set_state(url, '下載中', name=name)
-            job._progress_callback = lambda d, t, s: self._handle_progress(url, d, t, s)
+            job._progress_callback = lambda d, t, s: self._on_progress(url, d, t, s)
             job.start_download()
             with self._lock:
                 self._active.pop(url, None)
             if job._cancel_job:
                 self._set_state(url, '已取消')
             else:
-                self._set_state(url, '已下載', progress=100, speed='')
+                self._set_state(url, '已下載', progress=100)
         except Exception as exc:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
             with self._lock:
@@ -178,49 +173,44 @@ class DownloadManager:
 
     def _try_next(self):
         with self._lock:
-            if not self._pending or len(self._active) >= MAX_CONCURRENT:
+            if not self._pending or len(self._active) >= self._max_concurrent:
                 return
             url, dest = self._pending.pop(0)
             self._active[url] = None
         threading.Thread(target=self._run, args=(url, dest), daemon=True).start()
 
-    def _set_state(self, url: str, state: str, name: str = '',
-                   progress: int = -1, speed: str = ''):
+    def _set_state(self, url: str, state: str, name: str = '', progress: int = -1):
         with self._lock:
             item = self._items.get(url)
-            if not item:
-                return
-            item.state = state
-            if name:
-                item.name = name
-            if progress >= 0:
-                item.progress = progress
-            if speed is not None:
-                item.speed = speed
-        self._notify()
+            if item:
+                item.state = state
+                if name:
+                    item.name = name
+                if progress >= 0:
+                    item.progress = progress
+                if state != '下載中':
+                    item.speed = ''
 
-    def _handle_progress(self, url: str, done: int, total: int, speed_bps: float):
+    def _on_progress(self, url: str, done: int, total: int, speed_bps: float):
         if total <= 0:
             return
         pct = int(done * 100 / total)
         spd = (f'{speed_bps / 1024:.0f} KB/s' if speed_bps < 1024 * 1024
                else f'{speed_bps / 1024 / 1024:.1f} MB/s')
-        self._set_state(url, '下載中', progress=pct, speed=spd)
-
-    def _notify(self):
-        if self._on_update:
-            self._on_update()
+        with self._lock:
+            item = self._items.get(url)
+            if item:
+                item.progress = pct
+                item.speed = spd
 
     def save_csv(self, path: str):
-        items = self.get_items()
-        if not items:
-            return
+        with self._lock:
+            items = list(self._items.values())
         with open(path, 'w', encoding='utf-8', newline='') as f:
             w = csv.writer(f)
             w.writerow(['狀態', '名稱', '進度', '速度', '網址'])
             for item in items:
-                w.writerow([item.state, item.name,
-                            f'{item.progress}%' if item.progress else '',
+                w.writerow([item.state, item.name, f'{item.progress}%',
                             item.speed, item.url])
 
     def load_csv(self, path: str):
@@ -232,760 +222,918 @@ class DownloadManager:
                 if url:
                     self.add_item(url, row.get('名稱', ''), row.get('狀態', ''))
 
+    @property
+    def active_count(self) -> int:
+        with self._lock:
+            return len(self._active)
 
-# ── UI State ─────────────────────────────────────────────────────────
-class AppState:
-    def __init__(self):
-        self.site_key = 'JableTV'
-        self.categories: list[dict] = []
-        self.current_cat_idx = 0
-        self.page = 1
-        self.has_next = True
-        self.current_base_url = ''
-        self.search_query = ''
-        self.videos: list[dict] = []
-        self.selected_urls: set[str] = set()
-        self.loading = False
-        self.dest = 'download'
-        self.url_input = ''
-        self.console_lines: list[str] = []
-        self.sidebar_expanded: dict[str, bool] = {}
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
 
 
-# ── Browser logic ────────────────────────────────────────────────────
-SITES = {
-    'JableTV': {'browser': JableTVBrowser},
-    'MissAV': {'browser': MissAVBrowser},
-}
+# ── Browse helper ────────────────────────────────────────────────────
+def fetch_page_data(browser_cls, url: str) -> dict:
+    """Fetch video list from a category/search URL. Returns dict with videos list."""
+    try:
+        videos = browser_cls.fetch_page(url)
+        return {'videos': videos}
+    except Exception as e:
+        print(f'[瀏覽錯誤] {e}')
+        return {'videos': []}
 
 
-def build_page_url(state: AppState) -> str:
-    if state.site_key == 'JableTV':
-        base = state.current_base_url
-        if '?' in base:
-            return f'{base}&from_videos={state.page}'
-        return f'{base.rstrip("/")}/?from={state.page}'
-    return MissAVBrowser.page_url(state.current_base_url, state.page)
+# ── Thumbnail loader ────────────────────────────────────────────────
+_thumb_session: Optional[requests.Session] = None
+_thumb_lock = threading.Lock()
+_thumb_cache: dict = {}   # url -> PIL.Image (raw, not CTkImage; Tk root needed)
+_THUMB_SIZE = (260, 146)  # 16:9 at 260px wide
 
 
-# ── Main UI ──────────────────────────────────────────────────────────
-def gui_modern_main(url: str = '', dest: str = 'download'):
-    state = AppState()
-    state.dest = dest
-    state.url_input = url
+def _get_thumb_session() -> requests.Session:
+    global _thumb_session
+    if _thumb_session is None:
+        with _thumb_lock:
+            if _thumb_session is None:
+                s = requests.Session()
+                a = requests.adapters.HTTPAdapter(pool_connections=8,
+                                                  pool_maxsize=32)
+                s.mount('http://', a)
+                s.mount('https://', a)
+                _thumb_session = s
+    return _thumb_session
 
-    dlmgr = DownloadManager()
-    dlmgr.load_csv(CSV_PATH)
 
-    # NiceGUI update bridge: schedule UI refresh from download threads
-    def on_dl_update():
+def _fetch_thumbnail(url: str) -> Optional[Image.Image]:
+    """Download and decode a thumbnail; cached per-URL."""
+    if not url:
+        return None
+    cached = _thumb_cache.get(url)
+    if cached is not None:
+        return cached
+    try:
+        r = _get_thumb_session().get(url, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return None
+        img = Image.open(io.BytesIO(r.content)).convert('RGB')
+        img.thumbnail(_THUMB_SIZE, Image.LANCZOS)
+        _thumb_cache[url] = img
+        # Limit cache growth
+        if len(_thumb_cache) > 200:
+            # Drop oldest 40 entries
+            for k in list(_thumb_cache.keys())[:40]:
+                _thumb_cache.pop(k, None)
+        return img
+    except Exception:
+        return None
+
+
+# ── Main App ─────────────────────────────────────────────────────────
+class ModernApp(ctk.CTk):
+    def __init__(self, url: str = '', dest: str = 'download'):
+        super().__init__()
+
+        ctk.set_appearance_mode('dark')
+        ctk.set_default_color_theme('dark-blue')
+
+        self.title('JableTV & MissAV Downloader — by ALOS')
+        self.geometry('1280x800')
+        self.minsize(1000, 650)
+        self.configure(fg_color=BG_DARK)
+
+        self._dest = dest
+        self._url_input = url
+        self._is_closing = False
+
+        # Browse state
+        self._site_key = 'JableTV'
+        self._categories: list[dict] = []
+        self._current_base_url = ''
+        self._page = 1
+        self._has_next = True
+        self._videos: list[dict] = []
+        self._selected_urls: set = set()
+        self._sidebar_expanded: dict[str, bool] = {}
+        self._grid_gen: int = 0  # bumps on each page refresh so stale thumbs are dropped
+        self._dl_rows: dict = {}   # url -> {row, state_lbl, name_lbl, pb, pct, spd, remove}
+        self._dl_empty_lbl = None
+
+        # Download manager
+        self._dlmgr = DownloadManager(max_concurrent=DEFAULT_CONCURRENT)
+        self._dlmgr.load_csv(CSV_PATH)
+
+        self._build_ui()
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+
+        # Start periodic refresh for downloads
+        self._refresh_downloads()
+        # Start clipboard monitor (main-thread safe)
+        self._clp_text = ''
+        self._clipboard_poll()
+
+        # Load initial categories in background
+        threading.Thread(target=self._load_categories, daemon=True).start()
+
+    # ── Build UI ─────────────────────────────────────────────────────
+    def _build_ui(self):
+        # Header
+        header = ctk.CTkFrame(self, height=48, fg_color=BG_HEADER, corner_radius=0)
+        header.pack(fill='x')
+        header.pack_propagate(False)
+        ctk.CTkLabel(header, text='JableTV & MissAV Downloader',
+                     font=('Microsoft YaHei', 16, 'bold'),
+                     text_color=ACCENT).pack(side='left', padx=16)
+        ctk.CTkLabel(header, text='by ALOS  •  v2.0 Material',
+                     font=('Microsoft YaHei', 11),
+                     text_color=TEXT_DIM).pack(side='right', padx=16)
+
+        # Tabview
+        self._tabs = ctk.CTkTabview(self, fg_color=BG_DARK,
+                                     segmented_button_fg_color=BG_HEADER,
+                                     segmented_button_selected_color=ACCENT,
+                                     segmented_button_unselected_color=BG_CARD,
+                                     corner_radius=0)
+        self._tabs.pack(fill='both', expand=True, padx=0, pady=0)
+        self._tabs.add('瀏覽')
+        self._tabs.add('下載')
+        self._tabs.add('設定')
+
+        self._build_browse_tab()
+        self._build_download_tab()
+        self._build_settings_tab()
+
+        # Status bar
+        status_bar = ctk.CTkFrame(self, height=28, fg_color=BG_HEADER, corner_radius=0)
+        status_bar.pack(fill='x')
+        status_bar.pack_propagate(False)
+        self._status_lbl = ctk.CTkLabel(status_bar, text='就緒',
+                                         font=('Consolas', 11),
+                                         text_color=TEXT_SEC)
+        self._status_lbl.pack(side='left', padx=12)
+
+    # ── Browse Tab ───────────────────────────────────────────────────
+    def _build_browse_tab(self):
+        tab = self._tabs.tab('瀏覽')
+
+        # Top bar
+        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=50)
+        top.pack(fill='x')
+        top.pack_propagate(False)
+
+        # Site selector
+        self._site_var = ctk.StringVar(value='JableTV')
+        ctk.CTkLabel(top, text='站點:', text_color=TEXT_SEC,
+                     font=('Microsoft YaHei', 11)).pack(side='left', padx=(12, 4))
+        self._site_menu = ctk.CTkOptionMenu(
+            top, values=list(SITES.keys()), variable=self._site_var,
+            command=self._on_site_change, width=100,
+            fg_color=BG_INPUT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER)
+        self._site_menu.pack(side='left', padx=4)
+
+        # Category selector
+        ctk.CTkLabel(top, text='分類:', text_color=TEXT_SEC,
+                     font=('Microsoft YaHei', 11)).pack(side='left', padx=(12, 4))
+        self._cat_var = ctk.StringVar(value='載入中...')
+        self._cat_menu = ctk.CTkOptionMenu(
+            top, values=['載入中...'], variable=self._cat_var,
+            command=self._on_cat_change, width=160,
+            fg_color=BG_INPUT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER)
+        self._cat_menu.pack(side='left', padx=4)
+
+        # Search
+        self._search_var = ctk.StringVar()
+        search_entry = ctk.CTkEntry(top, textvariable=self._search_var,
+                                     placeholder_text='搜尋影片...',
+                                     width=200, fg_color=BG_INPUT,
+                                     border_color=BORDER, text_color=TEXT_PRI)
+        search_entry.pack(side='left', padx=(12, 4))
+        search_entry.bind('<Return>', lambda e: self._on_search())
+        ctk.CTkButton(top, text='搜尋', command=self._on_search,
+                      width=60, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER).pack(side='left', padx=4)
+
+        # Selection controls
+        self._sel_lbl = ctk.CTkLabel(top, text='', text_color=ACCENT,
+                                      font=('Microsoft YaHei', 11, 'bold'))
+        self._sel_lbl.pack(side='right', padx=8)
+        ctk.CTkButton(top, text='下載選中', command=self._download_selected,
+                      width=80, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER).pack(side='right', padx=4)
+        ctk.CTkButton(top, text='加入清單', command=self._add_selected_to_queue,
+                      width=80, fg_color=BG_CARD,
+                      hover_color='#2a2a4a',
+                      text_color=TEXT_PRI).pack(side='right', padx=4)
+
+        # Content area: sidebar + grid
+        content = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
+        content.pack(fill='both', expand=True)
+
+        # Sidebar
+        self._sidebar = ctk.CTkScrollableFrame(
+            content, width=130, fg_color='#0a0a16',
+            corner_radius=0, scrollbar_button_color=BORDER)
+        self._sidebar.pack(side='left', fill='y')
+
+        # Video grid area
+        grid_area = ctk.CTkFrame(content, fg_color=BG_DARK, corner_radius=0)
+        grid_area.pack(side='left', fill='both', expand=True)
+
+        self._grid_scroll = ctk.CTkScrollableFrame(
+            grid_area, fg_color=BG_DARK, corner_radius=0)
+        self._grid_scroll.pack(fill='both', expand=True)
+
+        # Navigation bar
+        nav = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=40)
+        nav.pack(fill='x')
+        nav.pack_propagate(False)
+        ctk.CTkButton(nav, text='« 首頁', width=60, fg_color=BG_CARD,
+                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                      command=lambda: self._goto_page(1)).pack(side='left', padx=4, pady=4)
+        ctk.CTkButton(nav, text='‹ 上一頁', width=70, fg_color=BG_CARD,
+                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                      command=lambda: self._goto_page(self._page - 1)
+                      ).pack(side='left', padx=4, pady=4)
+        self._page_lbl = ctk.CTkLabel(nav, text='第 1 頁', text_color=TEXT_PRI,
+                                       font=('Microsoft YaHei', 12, 'bold'),
+                                       width=80)
+        self._page_lbl.pack(side='left', padx=8)
+        ctk.CTkButton(nav, text='下一頁 ›', width=70, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER,
+                      command=lambda: self._goto_page(self._page + 1)
+                      ).pack(side='left', padx=4, pady=4)
+
+        self._rebuild_sidebar()
+
+    # ── Download Tab ─────────────────────────────────────────────────
+    def _build_download_tab(self):
+        tab = self._tabs.tab('下載')
+
+        # Input section
+        input_frame = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0)
+        input_frame.pack(fill='x', padx=0, pady=0)
+
+        row1 = ctk.CTkFrame(input_frame, fg_color='transparent')
+        row1.pack(fill='x', padx=12, pady=(8, 4))
+        ctk.CTkLabel(row1, text='存放位置', text_color=TEXT_SEC, width=70,
+                     font=('Microsoft YaHei', 11)).pack(side='left')
+        self._dest_var = ctk.StringVar(value=self._dest)
+        ctk.CTkEntry(row1, textvariable=self._dest_var,
+                     fg_color=BG_INPUT, border_color=BORDER,
+                     text_color=TEXT_PRI).pack(side='left', fill='x',
+                                               expand=True, padx=8)
+        ctk.CTkButton(row1, text='瀏覽', width=60, fg_color=BG_CARD,
+                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                      command=self._pick_dest).pack(side='left')
+        ctk.CTkButton(row1, text='開啟', width=50, fg_color=BG_CARD,
+                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                      command=self._open_dest_folder).pack(side='left', padx=(4, 0))
+
+        row2 = ctk.CTkFrame(input_frame, fg_color='transparent')
+        row2.pack(fill='x', padx=12, pady=(0, 8))
+        ctk.CTkLabel(row2, text='下載網址', text_color=TEXT_SEC, width=70,
+                     font=('Microsoft YaHei', 11)).pack(side='left')
+        self._dl_url_var = ctk.StringVar(value=self._url_input)
+        ctk.CTkEntry(row2, textvariable=self._dl_url_var,
+                     fg_color=BG_INPUT, border_color=BORDER,
+                     text_color=TEXT_PRI).pack(side='left', fill='x',
+                                               expand=True, padx=8)
+
+        # Action bar
+        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=44)
+        bar.pack(fill='x')
+        bar.pack_propagate(False)
+
+        ctk.CTkButton(bar, text='▶ 下載', width=80, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER,
+                      command=self._download_url).pack(side='left', padx=6, pady=6)
+        ctk.CTkButton(bar, text='▶▶ 全部下載', width=100, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER,
+                      command=self._download_all).pack(side='left', padx=4)
+
+        ctk.CTkButton(bar, text='清空', width=60, fg_color='#3a1a20',
+                      hover_color='#2a1215', text_color=ERROR_C,
+                      command=self._clear_queue).pack(side='right', padx=6, pady=6)
+        ctk.CTkButton(bar, text='全部取消', width=80, fg_color='#3a1a20',
+                      hover_color='#2a1215', text_color=ERROR_C,
+                      command=self._cancel_all).pack(side='right', padx=4)
+
+        # Speed limiter
+        ctk.CTkLabel(bar, text='速度:', text_color=TEXT_SEC,
+                     font=('Microsoft YaHei', 10)).pack(side='right', padx=(0, 4))
+        self._speed_var = ctk.StringVar(value='無限制')
+        ctk.CTkOptionMenu(bar, values=['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
+                                        '10 MB/s', '15 MB/s'],
+                          variable=self._speed_var,
+                          command=self._on_speed_change, width=100,
+                          fg_color=BG_INPUT, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOVER
+                          ).pack(side='right', padx=4, pady=6)
+
+        # Download list
+        self._dl_scroll = ctk.CTkScrollableFrame(
+            tab, fg_color=BG_DARK, corner_radius=0)
+        self._dl_scroll.pack(fill='both', expand=True)
+
+    # ── Settings Tab ─────────────────────────────────────────────────
+    def _build_settings_tab(self):
+        tab = self._tabs.tab('設定')
+
+        outer = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
+        outer.pack(fill='both', expand=True, padx=40, pady=20)
+
+        ctk.CTkLabel(outer, text='設定', font=('Microsoft YaHei', 18, 'bold'),
+                     text_color=TEXT_PRI).pack(anchor='w', pady=(0, 16))
+
+        # Download settings
+        grp = ctk.CTkFrame(outer, fg_color=BG_SECTION, corner_radius=8)
+        grp.pack(fill='x', pady=(0, 16))
+
+        ctk.CTkLabel(grp, text='下載設定', font=('Microsoft YaHei', 12, 'bold'),
+                     text_color=TEXT_SEC).pack(anchor='w', padx=16, pady=(12, 8))
+
+        # Save location
+        row_dest = ctk.CTkFrame(grp, fg_color='transparent')
+        row_dest.pack(fill='x', padx=16, pady=4)
+        ctk.CTkLabel(row_dest, text='存放位置', text_color=TEXT_SEC,
+                     width=80).pack(side='left')
+        ctk.CTkEntry(row_dest, textvariable=self._dest_var,
+                     fg_color=BG_INPUT, border_color=BORDER,
+                     text_color=TEXT_PRI).pack(side='left', fill='x',
+                                               expand=True, padx=8)
+        ctk.CTkButton(row_dest, text='瀏覽', width=60, fg_color=BG_CARD,
+                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                      command=self._pick_dest).pack(side='left')
+
+        # Speed limit
+        row_speed = ctk.CTkFrame(grp, fg_color='transparent')
+        row_speed.pack(fill='x', padx=16, pady=4)
+        ctk.CTkLabel(row_speed, text='速度限制', text_color=TEXT_SEC,
+                     width=80).pack(side='left')
+        ctk.CTkOptionMenu(row_speed, values=['無限制', '1 MB/s', '2 MB/s',
+                                              '5 MB/s', '10 MB/s', '15 MB/s'],
+                          variable=self._speed_var,
+                          command=self._on_speed_change, width=120,
+                          fg_color=BG_INPUT, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=8)
+
+        # Concurrent downloads
+        row_conc = ctk.CTkFrame(grp, fg_color='transparent')
+        row_conc.pack(fill='x', padx=16, pady=(4, 12))
+        ctk.CTkLabel(row_conc, text='同時下載數', text_color=TEXT_SEC,
+                     width=80).pack(side='left')
+        self._conc_var = ctk.StringVar(value=str(DEFAULT_CONCURRENT))
+        ctk.CTkOptionMenu(row_conc,
+                          values=[str(i) for i in range(1, MAX_CONCURRENT + 1)],
+                          variable=self._conc_var,
+                          command=self._on_conc_change, width=80,
+                          fg_color=BG_INPUT, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=8)
+        ctk.CTkLabel(row_conc, text=f'(最多 {MAX_CONCURRENT})',
+                     text_color=TEXT_DIM).pack(side='left')
+
+        # About
+        about = ctk.CTkFrame(outer, fg_color=BG_SECTION, corner_radius=8)
+        about.pack(fill='x', pady=(0, 16))
+        ctk.CTkLabel(about, text='關於', font=('Microsoft YaHei', 12, 'bold'),
+                     text_color=TEXT_SEC).pack(anchor='w', padx=16, pady=(12, 4))
+        ctk.CTkLabel(about, text='JableTV & MissAV Downloader',
+                     text_color=TEXT_PRI,
+                     font=('Microsoft YaHei', 13)).pack(anchor='w', padx=16)
+        ctk.CTkLabel(about, text='by ALOS (Alos21750)',
+                     text_color=ACCENT,
+                     font=('Microsoft YaHei', 11)).pack(anchor='w', padx=16, pady=2)
+        ctk.CTkLabel(about, text='v2.0.0 Material UI  •  僅供學習與研究用途',
+                     text_color=TEXT_SEC,
+                     font=('Microsoft YaHei', 10)).pack(anchor='w', padx=16, pady=(0, 12))
+
+    # ── Browse logic ─────────────────────────────────────────────────
+    def _load_categories(self):
+        browser = SITES[self._site_key]['browser']
         try:
-            ui.run_javascript('', respond=False)
+            cats = browser.fetch_categories()
         except Exception:
-            pass
+            cats = []
+        self._categories = cats
+        if cats:
+            self._current_base_url = cats[0]['url']
+            names = [c['name'] for c in cats]
+            self.after(0, lambda: self._update_cat_menu(names))
+            self.after(0, self._load_page)
 
-    dlmgr._on_update = on_dl_update
+    def _update_cat_menu(self, names: list[str]):
+        self._cat_menu.configure(values=names)
+        if names:
+            self._cat_var.set(names[0])
 
-    @ui.page('/')
-    async def main_page():
-        ui.dark_mode(True)
+    def _load_page(self):
+        browser = SITES[self._site_key]['browser']
+        base = self._current_base_url
+        if self._site_key == 'JableTV':
+            if '?' in base:
+                url = f'{base}&from_videos={self._page}'
+            else:
+                url = f'{base.rstrip("/")}/?from={self._page}'
+        else:
+            url = MissAVBrowser.page_url(base, self._page)
 
-        # ── Custom dark theme CSS ────────────────────────────────────
-        ui.add_head_html('''
-        <style>
-        :root {
-            --q-dark: #0d0d18;
-            --q-dark-page: #0a0a14;
-            --q-primary: #e94560;
-            --q-secondary: #7b61ff;
-        }
-        body { background: #0d0d18; }
-        .q-drawer { background: #0a0a16 !important; }
-        .q-header { background: #101020 !important; }
-        .q-tab-panel { background: #0d0d18 !important; padding: 0 !important; }
-        .q-footer { background: #101020 !important; }
-        .video-card {
-            background: #161630;
-            border: 2px solid #2a2a48;
-            border-radius: 8px;
-            overflow: hidden;
-            cursor: pointer;
-            transition: border-color 0.2s, transform 0.15s;
-        }
-        .video-card:hover {
-            border-color: #7b61ff;
-            transform: translateY(-2px);
-        }
-        .video-card.selected {
-            border-color: #e94560;
-            border-width: 3px;
-        }
-        .video-card .thumb-container {
-            position: relative;
-            width: 100%;
-            padding-top: 56.25%;
-            background: #0a0a18;
-            overflow: hidden;
-        }
-        .video-card .thumb-container img {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            object-fit: cover;
-        }
-        .video-card .duration-badge {
-            position: absolute;
-            bottom: 4px; right: 4px;
-            background: rgba(0,0,0,0.8);
-            color: #fff;
-            font-size: 11px;
-            font-family: monospace;
-            padding: 1px 5px;
-            border-radius: 3px;
-        }
-        .video-card .card-title {
-            padding: 8px 10px;
-            color: #f0f0f8;
-            font-size: 13px;
-            line-height: 1.35;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        .tag-btn {
-            color: #a0a0c0;
-            font-size: 12px;
-            padding: 3px 6px 3px 14px;
-            cursor: pointer;
-            transition: background 0.15s, color 0.15s;
-            user-select: none;
-        }
-        .tag-btn:hover { background: #1a1a30; color: #e94560; }
-        .group-header {
-            background: #0e0e20;
-            padding: 4px 8px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            user-select: none;
-        }
-        .group-header:hover { background: #141430; }
-        .dl-table .q-table__container { background: #161630 !important; }
-        .console-box {
-            background: #0a0a14;
-            color: #f0f0f8;
-            font-family: 'Consolas', monospace;
-            font-size: 12px;
-            padding: 10px;
-            height: 150px;
-            overflow-y: auto;
-            border-top: 1px solid #222240;
-        }
-        .status-chip {
-            font-size: 11px;
-            font-weight: bold;
-        }
-        </style>
-        ''')
+        def _fetch():
+            data = fetch_page_data(browser, url)
+            self._videos = data.get('videos', [])
+            self.after(0, self._refresh_grid)
+            self.after(0, lambda: self._page_lbl.configure(
+                text=f'第 {self._page} 頁'))
 
-        # ── Refs for dynamic update ──────────────────────────────
-        video_grid_ref = None
-        dl_table_ref = None
-        console_ref = None
-        status_ref = None
-        cat_select_ref = None
-        page_label_ref = None
-        sel_badge_ref = None
+        threading.Thread(target=_fetch, daemon=True).start()
 
-        # ── Category loading ─────────────────────────────────────
-        async def load_categories():
-            nonlocal cat_select_ref
-            browser = SITES[state.site_key]['browser']
-            cats = await asyncio.to_thread(browser.fetch_categories)
-            state.categories = cats
-            if cat_select_ref:
-                cat_select_ref.options = [c['name'] for c in cats]
-                cat_select_ref.update()
-            if cats:
-                state.current_cat_idx = 0
-                state.current_base_url = cats[0]['url']
-                if cat_select_ref:
-                    cat_select_ref.value = cats[0]['name']
-                await load_page()
+    def _refresh_grid(self):
+        for w in self._grid_scroll.winfo_children():
+            w.destroy()
 
-        # ── Page loading ─────────────────────────────────────────
-        async def load_page():
-            if state.loading:
-                return
-            state.loading = True
-            refresh_video_grid()
-            url = build_page_url(state)
-            browser = SITES[state.site_key]['browser']
-            try:
-                videos = await asyncio.to_thread(browser.fetch_page, url)
-            except Exception:
-                videos = []
-            state.videos = videos
-            state.has_next = len(videos) >= 12
-            state.loading = False
-            refresh_video_grid()
-            update_nav()
+        if not self._videos:
+            ctk.CTkLabel(self._grid_scroll, text='沒有找到影片',
+                         text_color=TEXT_DIM,
+                         font=('Microsoft YaHei', 14)).pack(pady=40)
+            return
 
-        # ── Video grid rendering ─────────────────────────────────
-        def refresh_video_grid():
-            nonlocal video_grid_ref
-            if video_grid_ref is None:
-                return
-            video_grid_ref.clear()
-            if state.loading:
-                with video_grid_ref:
-                    with ui.column().classes('w-full items-center py-20'):
-                        ui.spinner('dots', size='xl', color=ACCENT)
-                        ui.label('載入中...').classes('text-gray-400 mt-4')
-                return
-            if not state.videos:
-                with video_grid_ref:
-                    with ui.column().classes('w-full items-center py-20'):
-                        ui.icon('search_off', size='xl', color='grey-7')
-                        ui.label('沒有找到影片').classes('text-gray-400 mt-2')
-                return
-            with video_grid_ref:
-                for v in state.videos:
-                    build_video_card(v)
+        # Bump generation — any in-flight thumbnail loads from older
+        # pages will find a mismatch and silently drop their result.
+        self._grid_gen += 1
+        gen = self._grid_gen
 
-        def build_video_card(v: dict):
+        # Create grid of cards, 4 per row
+        row_frame = None
+        for i, v in enumerate(self._videos):
+            if i % 4 == 0:
+                row_frame = ctk.CTkFrame(self._grid_scroll, fg_color='transparent')
+                row_frame.pack(fill='x', padx=8, pady=4)
+
             url = v.get('url', '')
-            is_sel = url in state.selected_urls
-            sel_cls = ' selected' if is_sel else ''
-            with ui.element('div').classes(f'video-card{sel_cls}').on(
-                    'click', lambda _, u=url: toggle_select(u)):
-                # Thumbnail
-                thumb = v.get('thumbnail', '')
-                dur = v.get('duration', '')
-                with ui.element('div').classes('thumb-container'):
-                    if thumb:
-                        ui.element('img').props(f'src="{thumb}" loading="lazy"')
-                    if dur:
-                        ui.label(dur).classes('duration-badge')
-                # Title
-                title = v.get('title', '')
-                ui.label(
-                    title[:80] + '…' if len(title) > 80 else title
-                ).classes('card-title')
+            title = v.get('title', '')
+            dur = v.get('duration', '')
+            thumb_url = v.get('thumbnail', '')
+            is_sel = url in self._selected_urls
 
-        def toggle_select(url: str):
-            if url in state.selected_urls:
-                state.selected_urls.discard(url)
+            card = ctk.CTkFrame(row_frame, fg_color=BG_CARD, corner_radius=8,
+                                border_width=2,
+                                border_color=ACCENT if is_sel else BORDER)
+            card.pack(side='left', padx=4, pady=4, fill='x', expand=True)
+
+            # Thumbnail placeholder (fixed 16:9 area)
+            thumb_holder = ctk.CTkFrame(card, fg_color='#0a0a18',
+                                         height=_THUMB_SIZE[1], corner_radius=6)
+            thumb_holder.pack(fill='x', padx=6, pady=(6, 0))
+            thumb_holder.pack_propagate(False)
+            thumb_lbl = ctk.CTkLabel(thumb_holder, text='載入中...',
+                                      text_color=TEXT_DIM,
+                                      fg_color='transparent',
+                                      font=('Microsoft YaHei', 10))
+            thumb_lbl.pack(expand=True)
+
+            # Duration badge over thumbnail (bottom-right)
+            if dur:
+                dur_lbl = ctk.CTkLabel(thumb_holder, text=dur,
+                                        text_color='#ffffff',
+                                        fg_color='#000000',
+                                        corner_radius=3,
+                                        font=('Consolas', 9, 'bold'))
+                dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-4, y=-4)
+
+            # Title
+            title_text = title[:60] + '…' if len(title) > 60 else title
+            ctk.CTkLabel(card, text=title_text, text_color=TEXT_PRI,
+                         font=('Microsoft YaHei', 10),
+                         wraplength=240, justify='left').pack(
+                padx=8, pady=(6, 2), anchor='w')
+
+            # Bottom row: select button only (duration moved to thumbnail)
+            bottom = ctk.CTkFrame(card, fg_color='transparent')
+            bottom.pack(fill='x', padx=8, pady=(0, 8))
+
+            sel_text = '✓ 已選' if is_sel else '選取'
+            ctk.CTkButton(
+                bottom, text=sel_text, width=60, height=24,
+                fg_color=ACCENT if is_sel else BG_INPUT,
+                hover_color=ACCENT_HOVER,
+                font=('Microsoft YaHei', 9),
+                command=lambda u=url: self._toggle_select(u)
+            ).pack(side='right')
+
+            # Kick off background thumbnail load
+            if thumb_url:
+                self._load_thumb_async(thumb_url, thumb_lbl, gen)
             else:
-                state.selected_urls.add(url)
-            refresh_video_grid()
-            update_sel_badge()
+                thumb_lbl.configure(text='(無縮圖)')
 
-        def update_sel_badge():
-            nonlocal sel_badge_ref
-            n = len(state.selected_urls)
-            if sel_badge_ref:
-                sel_badge_ref.set_text(f'已選 {n} 部' if n else '')
-
-        # ── Navigation ───────────────────────────────────────────
-        def update_nav():
-            nonlocal page_label_ref
-            if page_label_ref:
-                page_label_ref.set_text(f'第 {state.page} 頁')
-
-        async def goto_page(p: int):
-            if p < 1:
+    def _load_thumb_async(self, thumb_url: str, label: ctk.CTkLabel, gen: int):
+        """Fetch thumbnail in a background thread; marshal result back to the
+        main thread via .after() so Tk widget updates stay thread-safe.
+        The gen counter prevents stale thumbs from polluting a newer page."""
+        def _worker():
+            img = _fetch_thumbnail(thumb_url)
+            if img is None:
                 return
-            state.page = p
-            await load_page()
-
-        async def on_cat_change(e):
-            idx = next((i for i, c in enumerate(state.categories)
-                        if c['name'] == e.value), -1)
-            if idx < 0:
-                return
-            state.current_cat_idx = idx
-            state.current_base_url = state.categories[idx]['url']
-            state.page = 1
-            state.has_next = True
-            state.selected_urls.clear()
-            update_sel_badge()
-            await load_page()
-
-        async def on_search():
-            q = state.search_query.strip()
-            if not q:
-                return
-            if state.site_key == 'JableTV':
-                state.current_base_url = f'https://jable.tv/search/?q={q}'
-            else:
-                state.current_base_url = f'https://missav.ai/dm265/cn/search?query={q}'
-            state.page = 1
-            state.has_next = True
-            state.selected_urls.clear()
-            update_sel_badge()
-            await load_page()
-
-        async def on_site_change(e):
-            state.site_key = e.value
-            state.categories.clear()
-            state.selected_urls.clear()
-            update_sel_badge()
-            rebuild_sidebar()
-            await load_categories()
-
-        async def on_tag_click(url: str, name: str):
-            state.current_base_url = url
-            state.page = 1
-            state.has_next = True
-            state.selected_urls.clear()
-            update_sel_badge()
-            if cat_select_ref:
-                cat_select_ref.value = f'🏷 {name}'
-            await load_page()
-
-        # ── Download actions ─────────────────────────────────────
-        def add_selected_to_queue():
-            for url in list(state.selected_urls):
-                if M3U8Sites.VaildateUrl(url):
-                    dlmgr.add_item(url, state='等待中')
-            n = len(state.selected_urls)
-            state.selected_urls.clear()
-            update_sel_badge()
-            refresh_video_grid()
-            refresh_dl_table()
-            ui.notify(f'已加入 {n} 部到清單', color=SUCCESS)
-
-        def download_selected():
-            dest = state.dest
-            for url in list(state.selected_urls):
-                if M3U8Sites.VaildateUrl(url):
-                    dlmgr.add_item(url, state='等待中')
-                    dlmgr.enqueue(url, dest)
-            n = len(state.selected_urls)
-            state.selected_urls.clear()
-            update_sel_badge()
-            refresh_video_grid()
-            refresh_dl_table()
-            ui.notify(f'{n} 部開始下載', color=ACCENT)
-
-        def download_url_input():
-            url = state.url_input.strip()
-            if not url:
-                ui.notify('請先輸入網址', color=WARNING)
-                return
-            if not M3U8Sites.VaildateUrl(url):
-                ui.notify(f'不支援的網址', color=ERROR_C)
-                return
-            dlmgr.add_item(url, state='等待中')
-            dlmgr.enqueue(url, state.dest)
-            refresh_dl_table()
-            ui.notify('已加入下載', color=SUCCESS)
-
-        def download_all():
-            dest = state.dest
-            count = 0
-            for item in dlmgr.get_items():
-                if item.state not in ('已下載', '下載中', '準備中', '等待中'):
-                    dlmgr.enqueue(item.url, dest)
-                    count += 1
-            refresh_dl_table()
-            if count:
-                ui.notify(f'已加入 {count} 個下載任務', color=SUCCESS)
-            else:
-                ui.notify('沒有需要下載的項目', color=WARNING)
-
-        def cancel_all_downloads():
-            dlmgr.cancel_all()
-            refresh_dl_table()
-            ui.notify('已取消所有下載', color=WARNING)
-
-        def clear_queue():
-            dlmgr.clear_all()
-            refresh_dl_table()
-            ui.notify('已清空下載清單', color=WARNING)
-
-        def open_dest_folder():
-            import subprocess, platform
-            folder = os.path.abspath(state.dest)
-            os.makedirs(folder, exist_ok=True)
-            system = platform.system()
-            if system == 'Windows':
-                os.startfile(folder)
-            elif system == 'Darwin':
-                subprocess.Popen(['open', folder])
-            else:
-                subprocess.Popen(['xdg-open', folder])
-
-        # ── Download table ───────────────────────────────────────
-        def refresh_dl_table():
-            nonlocal dl_table_ref
-            if dl_table_ref is None:
-                return
-            dl_table_ref.clear()
-            items = dlmgr.get_items()
-            with dl_table_ref:
-                if not items:
-                    with ui.column().classes('w-full items-center py-8'):
-                        ui.icon('download', size='xl', color='grey-8')
-                        ui.label('下載清單是空的').classes('text-gray-500 mt-2')
+            # Only apply if this label is still part of the current page.
+            def _apply():
+                if self._is_closing or gen != self._grid_gen:
                     return
-                for item in items:
-                    build_dl_row(item)
+                try:
+                    if not label.winfo_exists():
+                        return
+                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img,
+                                            size=img.size)
+                    label.configure(image=ctk_img, text='')
+                    # Keep a reference on the widget so GC doesn't reclaim it
+                    label._ctk_img_ref = ctk_img
+                except Exception:
+                    pass
+            self.after(0, _apply)
+        threading.Thread(target=_worker, daemon=True).start()
 
-        def build_dl_row(item: DownloadItem):
-            color_map = {
-                '下載中': ACCENT, '準備中': ACCENT2, '等待中': WARNING,
-                '已下載': SUCCESS, '未完成': WARNING, '已取消': '#666688',
-                '網址錯誤': ERROR_C,
-            }
-            color = color_map.get(item.state, '#a0a0c0')
-            with ui.row().classes(
-                    'w-full items-center px-4 py-2 gap-4'
-                    ).style('background: #161630; border-bottom: 1px solid #222240;'
-                            'min-height: 44px;'):
-                # Status chip
-                ui.badge(item.state or '—', color=color).classes(
-                    'status-chip').style('min-width: 60px; text-align: center;')
-                # Name
-                ui.label(item.name).classes(
-                    'text-sm flex-grow truncate'
-                    ).style('color: #f0f0f8; max-width: 400px;')
-                # Progress bar
-                if item.state == '下載中' and item.progress > 0:
-                    ui.linear_progress(
-                        value=item.progress / 100, show_value=False
-                    ).props('color="red-8" track-color="grey-9"').classes(
-                        'flex-grow').style('max-width: 200px;')
-                    ui.label(f'{item.progress}%').classes(
-                        'text-xs').style('color: #a0a0c0; width: 40px;')
+    def _toggle_select(self, url: str):
+        if url in self._selected_urls:
+            self._selected_urls.discard(url)
+        else:
+            self._selected_urls.add(url)
+        self._refresh_grid()
+        n = len(self._selected_urls)
+        self._sel_lbl.configure(text=f'已選 {n} 部' if n else '')
+
+    def _goto_page(self, p: int):
+        if p < 1:
+            return
+        self._page = p
+        self._load_page()
+
+    def _on_site_change(self, val):
+        self._site_key = val
+        self._categories.clear()
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._rebuild_sidebar()
+        threading.Thread(target=self._load_categories, daemon=True).start()
+
+    def _on_cat_change(self, val):
+        idx = next((i for i, c in enumerate(self._categories)
+                    if c['name'] == val), -1)
+        if idx < 0:
+            return
+        self._current_base_url = self._categories[idx]['url']
+        self._page = 1
+        self._has_next = True
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._load_page()
+
+    def _on_search(self):
+        q = self._search_var.get().strip()
+        if not q:
+            return
+        if self._site_key == 'JableTV':
+            self._current_base_url = f'https://jable.tv/search/?q={q}'
+        else:
+            self._current_base_url = f'https://missav.ai/dm265/cn/search?query={q}'
+        self._page = 1
+        self._has_next = True
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._load_page()
+
+    def _on_tag_click(self, url: str, name: str):
+        self._current_base_url = url
+        self._page = 1
+        self._has_next = True
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._cat_var.set(f'🏷 {name}')
+        self._load_page()
+
+    # ── Sidebar ──────────────────────────────────────────────────────
+    def _rebuild_sidebar(self):
+        for w in self._sidebar.winfo_children():
+            w.destroy()
+
+        ctk.CTkLabel(self._sidebar, text='標籤選片',
+                     text_color=ACCENT,
+                     font=('Microsoft YaHei', 12, 'bold')).pack(
+            anchor='w', padx=8, pady=(8, 4))
+
+        if self._site_key != 'JableTV':
+            ctk.CTkLabel(self._sidebar, text='僅 JableTV\n支援標籤',
+                         text_color=TEXT_DIM,
+                         font=('Microsoft YaHei', 10)).pack(pady=20)
+            return
+
+        tags = JableTVBrowser.SIDEBAR_TAGS
+        for group_name, tag_list in tags.items():
+            expanded = self._sidebar_expanded.get(group_name, False)
+
+            # Group header button
+            arrow = '▾' if expanded else '▸'
+            hdr = ctk.CTkButton(
+                self._sidebar,
+                text=f'{arrow} {group_name} ({len(tag_list)})',
+                fg_color='#0e0e20', hover_color='#141430',
+                text_color=TEXT_SEC, anchor='w',
+                font=('Microsoft YaHei', 10, 'bold'),
+                height=28, corner_radius=0,
+                command=lambda g=group_name: self._toggle_group(g))
+            hdr.pack(fill='x', padx=0, pady=0)
+
+            if expanded:
+                for name, slug in tag_list:
+                    tag_url = JableTVBrowser.tag_url(slug)
+                    btn = ctk.CTkButton(
+                        self._sidebar, text=name,
+                        fg_color='transparent', hover_color='#1a1a30',
+                        text_color=TEXT_SEC, anchor='w',
+                        font=('Microsoft YaHei', 10),
+                        height=24, corner_radius=0,
+                        command=lambda u=tag_url, n=name: self._on_tag_click(u, n))
+                    btn.pack(fill='x', padx=(12, 0), pady=0)
+
+    def _toggle_group(self, group: str):
+        self._sidebar_expanded[group] = not self._sidebar_expanded.get(group, False)
+        self._rebuild_sidebar()
+
+    # ── Download actions ─────────────────────────────────────────────
+    def _add_selected_to_queue(self):
+        for url in list(self._selected_urls):
+            if M3U8Sites.VaildateUrl(url):
+                self._dlmgr.add_item(url, state='等待中')
+        n = len(self._selected_urls)
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._refresh_grid()
+        print(f'已加入 {n} 部到清單')
+
+    def _download_selected(self):
+        dest = self._dest_var.get() or 'download'
+        for url in list(self._selected_urls):
+            if M3U8Sites.VaildateUrl(url):
+                self._dlmgr.add_item(url, state='等待中')
+                self._dlmgr.enqueue(url, dest)
+        n = len(self._selected_urls)
+        self._selected_urls.clear()
+        self._sel_lbl.configure(text='')
+        self._refresh_grid()
+        print(f'{n} 部開始下載')
+
+    def _download_url(self):
+        url = self._dl_url_var.get().strip()
+        if not url:
+            return
+        if not M3U8Sites.VaildateUrl(url):
+            print(f'不支援的網址: {url}')
+            return
+        dest = self._dest_var.get() or 'download'
+        self._dlmgr.add_item(url, state='等待中')
+        self._dlmgr.enqueue(url, dest)
+
+    def _download_all(self):
+        dest = self._dest_var.get() or 'download'
+        count = 0
+        for item in self._dlmgr.get_items():
+            if item.state not in ('已下載', '下載中', '準備中', '等待中'):
+                self._dlmgr.enqueue(item.url, dest)
+                count += 1
+        if count:
+            print(f'已加入 {count} 個下載任務')
+
+    def _cancel_all(self):
+        self._dlmgr.cancel_all()
+
+    def _clear_queue(self):
+        self._dlmgr.clear_all()
+
+    def _on_speed_change(self, val):
+        from M3U8Sites.M3U8Crawler import speed_limiter
+        if val == '無限制':
+            speed_limiter.set_limit(0)
+        else:
+            mbps = float(val.split()[0])
+            speed_limiter.set_limit(mbps)
+
+    def _on_conc_change(self, val):
+        self._dlmgr.max_concurrent = int(val)
+
+    def _pick_dest(self):
+        d = filedialog.askdirectory()
+        if d:
+            self._dest_var.set(d)
+
+    def _open_dest_folder(self):
+        import subprocess, platform
+        dest = self._dest_var.get() or 'download'
+        folder = os.path.abspath(dest)
+        os.makedirs(folder, exist_ok=True)
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(folder)
+        elif system == 'Darwin':
+            subprocess.Popen(['open', folder])
+        else:
+            subprocess.Popen(['xdg-open', folder])
+
+    # ── Download list refresh (incremental — no destroy/rebuild storm) ──
+    _STATE_COLORS = {
+        '下載中': ACCENT, '準備中': ACCENT2, '等待中': WARNING,
+        '已下載': SUCCESS, '未完成': WARNING, '已取消': TEXT_DIM,
+        '網址錯誤': ERROR_C,
+    }
+
+    def _refresh_downloads(self):
+        if self._is_closing:
+            return
+
+        items = self._dlmgr.get_items()
+        current_urls = {i.url for i in items}
+
+        # Remove rows for items no longer present
+        for url in list(self._dl_rows.keys()):
+            if url not in current_urls:
+                widgets = self._dl_rows.pop(url)
+                try:
+                    widgets['row'].destroy()
+                except Exception:
+                    pass
+
+        # Toggle empty placeholder
+        if not items:
+            if self._dl_empty_lbl is None:
+                self._dl_empty_lbl = ctk.CTkLabel(
+                    self._dl_scroll, text='下載清單是空的',
+                    text_color=TEXT_DIM,
+                    font=('Microsoft YaHei', 13))
+                self._dl_empty_lbl.pack(pady=40)
+        else:
+            if self._dl_empty_lbl is not None:
+                try:
+                    self._dl_empty_lbl.destroy()
+                except Exception:
+                    pass
+                self._dl_empty_lbl = None
+
+            # Create or update each row
+            for item in items:
+                if item.url in self._dl_rows:
+                    self._update_dl_row(self._dl_rows[item.url], item)
                 else:
-                    ui.element('div').classes('flex-grow')
-                # Speed
-                if item.speed:
-                    ui.label(item.speed).classes(
-                        'text-xs').style('color: #a0a0c0; width: 80px;')
-                # Delete button
-                ui.button(icon='close', on_click=lambda _, u=item.url:
-                          (dlmgr.remove_item(u), refresh_dl_table())
-                          ).props('flat dense round size="sm" color="grey-7"')
+                    self._dl_rows[item.url] = self._build_dl_row(item)
 
-        # ── Speed limiter ────────────────────────────────────────
-        def on_speed_change(e):
-            from M3U8Sites.M3U8Crawler import speed_limiter
-            val = e.value
-            if val == '無限制':
-                speed_limiter.set_limit(0)
-            else:
-                mbps = float(val.split()[0])
-                speed_limiter.set_limit(mbps)
-            ui.notify(f'速度限制: {val}', color='info')
+        # Update status bar
+        a = self._dlmgr.active_count
+        p = self._dlmgr.pending_count
+        parts = []
+        if a:
+            parts.append(f'下載中 {a}/{self._dlmgr.max_concurrent}')
+        if p:
+            parts.append(f'等待中 {p}')
+        done = sum(1 for i in items if i.state == '已下載')
+        if done:
+            parts.append(f'已完成 {done}')
+        self._status_lbl.configure(text='  |  '.join(parts) if parts else '就緒')
 
-        # ── Sidebar builder ──────────────────────────────────────
-        sidebar_container_ref = None
+        self.after(1000, self._refresh_downloads)
 
-        def rebuild_sidebar():
-            nonlocal sidebar_container_ref
-            if sidebar_container_ref is None:
+    def _build_dl_row(self, item: DownloadItem) -> dict:
+        """Build one download row once; return widget handles for in-place updates."""
+        color = self._STATE_COLORS.get(item.state, TEXT_SEC)
+
+        row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=4,
+                           height=40)
+        row.pack(fill='x', padx=4, pady=2)
+        row.pack_propagate(False)
+
+        state_lbl = ctk.CTkLabel(row, text=item.state or '—', text_color=color,
+                                 font=('Microsoft YaHei', 10, 'bold'),
+                                 width=60)
+        state_lbl.pack(side='left', padx=8)
+
+        name_lbl = ctk.CTkLabel(row, text=item.name or item.url,
+                                text_color=TEXT_PRI,
+                                font=('Microsoft YaHei', 10),
+                                anchor='w')
+        name_lbl.pack(side='left', fill='x', expand=True, padx=4)
+
+        # Progress widgets (always present; hidden when not downloading)
+        pb = ctk.CTkProgressBar(row, width=120, height=12,
+                                fg_color='#1a1a2e',
+                                progress_color=ACCENT)
+        pb.set(max(0.0, min(1.0, item.progress / 100)))
+        pct_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
+                               font=('Consolas', 9), width=40)
+        spd_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
+                               font=('Consolas', 9), width=80)
+
+        # Remove button
+        remove_btn = ctk.CTkButton(
+            row, text='✕', width=28, height=28,
+            fg_color='transparent', hover_color='#3a1a20',
+            text_color=TEXT_DIM, font=('Consolas', 12),
+            command=lambda u=item.url: self._dlmgr.remove_item(u))
+        remove_btn.pack(side='right', padx=4)
+
+        widgets = {
+            'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
+            'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
+            'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
+            'last_state': None, 'last_name': None,
+            'last_progress': -1, 'last_speed': None,
+        }
+        self._update_dl_row(widgets, item)
+        return widgets
+
+    def _update_dl_row(self, w: dict, item: DownloadItem):
+        """Update an existing row's fields in place without rebuilding widgets."""
+        # State text + color
+        if w['last_state'] != item.state:
+            color = self._STATE_COLORS.get(item.state, TEXT_SEC)
+            try:
+                w['state_lbl'].configure(text=item.state or '—', text_color=color)
+            except Exception:
                 return
-            sidebar_container_ref.clear()
-            with sidebar_container_ref:
-                if state.site_key == 'JableTV':
-                    build_jable_sidebar()
-                else:
-                    with ui.column().classes('w-full items-center py-8'):
-                        ui.label('僅 JableTV 支援標籤瀏覽').classes(
-                            'text-gray-600 text-sm')
+            w['last_state'] = item.state
 
-        def build_jable_sidebar():
-            tags = JableTVBrowser.SIDEBAR_TAGS
-            for group_name, tag_list in tags.items():
-                expanded = state.sidebar_expanded.get(group_name, False)
-                # Group header
-                with ui.element('div').classes('group-header').on(
-                        'click', lambda _, g=group_name: toggle_sidebar_group(g)):
-                    arrow = '▾' if expanded else '▸'
-                    ui.label(arrow).style(
-                        'color: #666688; font-size: 11px; width: 12px;')
-                    ui.label(group_name).style(
-                        'color: #a0a0c0; font-size: 13px; font-weight: bold;'
-                        'flex-grow: 1;')
-                    ui.label(str(len(tag_list))).style(
-                        'color: #666688; font-size: 11px;')
-                # Tag list (visible if expanded)
-                if expanded:
-                    for name, slug in tag_list:
-                        tag_url = JableTVBrowser.tag_url(slug)
-                        ui.label(name).classes('tag-btn').on(
-                            'click', lambda _, u=tag_url, n=name:
-                            on_tag_click(u, n))
+        # Name (may arrive after creation once metadata is scraped)
+        display_name = item.name or item.url
+        if w['last_name'] != display_name:
+            try:
+                w['name_lbl'].configure(text=display_name)
+            except Exception:
+                return
+            w['last_name'] = display_name
 
-        def toggle_sidebar_group(group_name: str):
-            state.sidebar_expanded[group_name] = not state.sidebar_expanded.get(
-                group_name, False)
-            rebuild_sidebar()
+        # Progress bar: show only while downloading
+        is_downloading = (item.state == '下載中' and item.progress > 0)
+        if is_downloading:
+            if not w['pb_visible']:
+                w['pb'].pack(side='left', padx=4, before=w.get('_before_remove', None))
+                # If before-widget ref not set, fall back to simple pack (still side='left')
+                w['pb_visible'] = True
+            if w['last_progress'] != item.progress:
+                w['pb'].set(max(0.0, min(1.0, item.progress / 100)))
+                w['last_progress'] = item.progress
+            pct_text = f'{item.progress}%'
+            if not w['pct_visible']:
+                w['pct_lbl'].pack(side='left')
+                w['pct_visible'] = True
+            if w['pct_lbl'].cget('text') != pct_text:
+                w['pct_lbl'].configure(text=pct_text)
+        else:
+            if w['pb_visible']:
+                try: w['pb'].pack_forget()
+                except Exception: pass
+                w['pb_visible'] = False
+            if w['pct_visible']:
+                try: w['pct_lbl'].pack_forget()
+                except Exception: pass
+                w['pct_visible'] = False
 
-        # ── Auto-refresh download table ──────────────────────────
-        dl_timer = None
+        # Speed
+        if item.speed:
+            if not w['spd_visible']:
+                w['spd_lbl'].pack(side='left', padx=4)
+                w['spd_visible'] = True
+            if w['last_speed'] != item.speed:
+                w['spd_lbl'].configure(text=item.speed)
+                w['last_speed'] = item.speed
+        else:
+            if w['spd_visible']:
+                try: w['spd_lbl'].pack_forget()
+                except Exception: pass
+                w['spd_visible'] = False
+                w['last_speed'] = None
 
-        def start_dl_refresh():
-            nonlocal dl_timer
-            refresh_dl_table()
-            dl_timer = ui.timer(2.0, refresh_dl_table)
+    # ── Clipboard monitor (main-thread safe) ─────────────────────────
+    def _clipboard_poll(self):
+        if self._is_closing:
+            return
+        try:
+            clp = self.clipboard_get()
+            if clp != self._clp_text:
+                self._clp_text = clp
+                for m in re.finditer(r'https?://\S+', clp):
+                    url = m.group(0).rstrip('.,;)\'"')
+                    if M3U8Sites.VaildateUrl(url):
+                        existing = {i.url for i in self._dlmgr.get_items()}
+                        if url not in existing:
+                            self._dlmgr.add_item(url)
+                            print(f'[剪貼簿] {url}')
+        except (tk.TclError, Exception):
+            pass
+        self.after(800, self._clipboard_poll)
 
-        # ── Layout ───────────────────────────────────────────────
-        with ui.header().classes('items-center px-4 py-2 gap-4'):
-            ui.label('JableTV & MissAV Downloader').classes(
-                'text-lg font-bold').style(f'color: {ACCENT};')
-            ui.space()
-            ui.label('by ALOS  •  v2.0').classes('text-xs').style(
-                'color: #666688;')
+    # ── Close ────────────────────────────────────────────────────────
+    def _on_close(self):
+        self._is_closing = True
+        self._dlmgr.cancel_all()
+        self._dlmgr.save_csv(CSV_PATH)
+        self.destroy()
 
-        with ui.left_drawer(value=True, bordered=True).classes(
-                'px-0 py-0').style(
-                'width: 120px; background: #0a0a16;') as drawer:
-            # Sidebar header
-            with ui.element('div').style(
-                    'background: #0e0e20; padding: 8px 10px;'):
-                ui.label('標籤選片').style(
-                    f'color: {ACCENT}; font-size: 13px; font-weight: bold;')
-            ui.separator().style('background: #2a2a48;')
-            sidebar_container_ref = ui.column().classes('w-full gap-0')
 
-        with ui.column().classes('w-full h-full gap-0'):
-            # ── Tabs ─────────────────────────────────────────────
-            with ui.tabs().classes('w-full').props(
-                    'dense align="left" active-color="red-8"'
-                    ' indicator-color="red-8"'
-                    ).style('background: #101020;') as tabs:
-                browse_tab = ui.tab('瀏覽', icon='explore')
-                dl_tab = ui.tab('下載', icon='download')
-                settings_tab = ui.tab('設定', icon='settings')
-
-            with ui.tab_panels(tabs, value='瀏覽').classes('w-full flex-grow'):
-
-                # ══════════════════════════════════════════════════
-                #  Browse tab
-                # ══════════════════════════════════════════════════
-                with ui.tab_panel('瀏覽').classes('p-0'):
-                    # Top bar
-                    with ui.row().classes(
-                            'w-full items-center px-4 py-2 gap-3'
-                            ).style('background: #101020;'):
-                        # Site selector
-                        ui.select(
-                            list(SITES.keys()), value='JableTV',
-                            label='站點', on_change=on_site_change
-                        ).props('dense outlined dark').classes('w-28')
-                        ui.separator().props('vertical')
-
-                        # Category selector
-                        cat_select_ref = ui.select(
-                            [], label='分類', on_change=on_cat_change
-                        ).props('dense outlined dark').classes('w-40')
-
-                        ui.separator().props('vertical')
-
-                        # Search
-                        ui.input(
-                            placeholder='搜尋影片...',
-                            on_change=lambda e: setattr(state, 'search_query', e.value)
-                        ).props('dense outlined dark').classes('w-52').on(
-                            'keydown.enter', on_search)
-                        ui.button('搜尋', on_click=on_search, color='red-8'
-                                  ).props('dense unelevated')
-
-                        ui.space()
-
-                        # Selection controls
-                        sel_badge_ref = ui.label('').style(
-                            f'color: {ACCENT}; font-weight: bold; font-size: 13px;')
-                        ui.button('加入清單', on_click=add_selected_to_queue
-                                  ).props('flat dense color="grey-5"')
-                        ui.button('下載選中', on_click=download_selected,
-                                  color='red-8').props('dense unelevated')
-
-                    ui.separator().style('background: #222240;')
-
-                    # Video grid
-                    video_grid_ref = ui.element('div').classes(
-                        'w-full px-4 py-4'
-                    ).style(
-                        'display: grid;'
-                        'grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));'
-                        'gap: 12px;'
-                        'overflow-y: auto; flex-grow: 1;'
-                    )
-
-                    # Bottom nav
-                    ui.separator().style('background: #222240;')
-                    with ui.row().classes(
-                            'w-full items-center justify-center px-4 py-3 gap-4'
-                            ).style('background: #101020;'):
-                        ui.button('« 首頁', on_click=lambda: goto_page(1)
-                                  ).props('flat dense color="grey-5"')
-                        ui.button('‹ 上一頁',
-                                  on_click=lambda: goto_page(state.page - 1)
-                                  ).props('flat dense color="grey-5"')
-                        page_label_ref = ui.label('第 1 頁').style(
-                            'color: #f0f0f8; font-weight: bold;'
-                            'min-width: 80px; text-align: center;')
-                        ui.button('下一頁 ›',
-                                  on_click=lambda: goto_page(state.page + 1),
-                                  color='red-8').props('dense unelevated')
-
-                # ══════════════════════════════════════════════════
-                #  Download tab
-                # ══════════════════════════════════════════════════
-                with ui.tab_panel('下載').classes('p-0'):
-                    # URL input section
-                    with ui.row().classes(
-                            'w-full items-center px-4 py-3 gap-3'
-                            ).style('background: #131328;'):
-                        ui.input(
-                            label='存放位置', value=state.dest,
-                            on_change=lambda e: setattr(state, 'dest', e.value)
-                        ).props('dense outlined dark').classes('flex-grow')
-                        ui.button(icon='folder_open', on_click=open_dest_folder
-                                  ).props('flat dense color="grey-5"')
-
-                    with ui.row().classes(
-                            'w-full items-center px-4 py-2 gap-3'
-                            ).style('background: #131328;'):
-                        ui.input(
-                            label='下載網址',
-                            on_change=lambda e: setattr(state, 'url_input', e.value)
-                        ).props('dense outlined dark').classes('flex-grow')
-
-                    # Action bar
-                    ui.separator().style('background: #222240;')
-                    with ui.row().classes(
-                            'w-full items-center px-4 py-2 gap-2 flex-wrap'
-                            ).style('background: #101020;'):
-                        ui.button('▶ 下載', on_click=download_url_input,
-                                  color='red-8').props('dense unelevated')
-                        ui.button('▶▶ 全部下載', on_click=download_all,
-                                  color='red-8').props('dense unelevated')
-                        ui.separator().props('vertical').classes('mx-2')
-                        ui.button('清空清單', on_click=clear_queue
-                                  ).props('flat dense color="red-4"')
-                        ui.button('全部取消', on_click=cancel_all_downloads
-                                  ).props('flat dense color="red-4"')
-
-                        ui.space()
-                        ui.label('速度限制:').style('color: #a0a0c0; font-size: 12px;')
-                        ui.select(
-                            ['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
-                             '10 MB/s', '15 MB/s'],
-                            value='無限制', on_change=on_speed_change
-                        ).props('dense outlined dark').classes('w-28')
-
-                    # Download list
-                    ui.separator().style('background: #222240;')
-                    dl_table_ref = ui.column().classes('w-full gap-0 flex-grow'
-                                                       ).style('overflow-y: auto;')
-
-                # ══════════════════════════════════════════════════
-                #  Settings tab
-                # ══════════════════════════════════════════════════
-                with ui.tab_panel('設定').classes('p-6'):
-                    with ui.card().classes('w-full max-w-2xl mx-auto').style(
-                            'background: #131328;'):
-                        ui.label('設定').classes('text-xl font-bold mb-4'
-                                                ).style('color: #f0f0f8;')
-
-                        with ui.column().classes('w-full gap-4'):
-                            ui.label('下載設定').classes('text-sm font-bold'
-                                                        ).style('color: #a0a0c0;')
-                            ui.input(
-                                label='存放位置', value=state.dest,
-                                on_change=lambda e: setattr(state, 'dest', e.value)
-                            ).props('outlined dark').classes('w-full')
-
-                            ui.select(
-                                ['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
-                                 '10 MB/s', '15 MB/s'],
-                                value='無限制', label='速度限制',
-                                on_change=on_speed_change
-                            ).props('outlined dark').classes('w-48')
-
-                            with ui.row().classes('items-center gap-2'):
-                                ui.label('同時下載數:').style(
-                                    'color: #a0a0c0; font-size: 13px;')
-                                ui.label(str(MAX_CONCURRENT)).style(
-                                    'color: #f0f0f8;')
-                                ui.label('(固定)').style(
-                                    'color: #666688; font-size: 12px;')
-
-                        ui.separator().classes('my-4').style('background: #222240;')
-
-                        with ui.column().classes('w-full gap-2'):
-                            ui.label('關於').classes('text-sm font-bold'
-                                                    ).style('color: #a0a0c0;')
-                            ui.label('JableTV & MissAV Downloader').style(
-                                'color: #f0f0f8;')
-                            ui.label('by ALOS (Alos21750)').style(
-                                'color: #e94560; font-size: 12px;')
-                            ui.label(
-                                'v2.0.0 Modern UI  •  僅供學習與研究用途'
-                            ).style('color: #a0a0c0; font-size: 12px;')
-
-        # ── Footer ───────────────────────────────────────────────
-        with ui.footer().classes('items-center px-4 py-1'):
-            status_ref = ui.label('就緒').style(
-                'color: #a0a0c0; font-size: 12px;')
-
-        # ── On page load ─────────────────────────────────────────
-        rebuild_sidebar()
-        await load_categories()
-        start_dl_refresh()
-
-    # ── Save on shutdown ─────────────────────────────────────────
-    app.on_shutdown(lambda: dlmgr.save_csv(CSV_PATH))
-
-    # ── Chrome extension API endpoints ───────────────────────────
-    from starlette.middleware.cors import CORSMiddleware
-    app.add_middleware(CORSMiddleware,
-                       allow_origins=['*'],
-                       allow_methods=['GET', 'POST', 'OPTIONS'],
-                       allow_headers=['*'])
-
-    @app.get('/_nicegui/api/status')
-    async def api_status():
-        items = dlmgr.get_items()
-        active = sum(1 for i in items if i.state == '下載中')
-        return JSONResponse({'status': 'ok', 'active': active,
-                             'total': len(items)})
-
-    @app.post('/_nicegui/api/download')
-    async def api_download(request: Request):
-        body = await request.json()
-        url = body.get('url', '').strip()
-        if not url or not M3U8Sites.VaildateUrl(url):
-            return JSONResponse({'error': 'invalid url'}, status_code=400)
-        dlmgr.add_item(url, state='等待中')
-        dlmgr.enqueue(url, state.dest)
-        return JSONResponse({'ok': True})
-
-    @app.post('/_nicegui/api/download-batch')
-    async def api_download_batch(request: Request):
-        body = await request.json()
-        urls = body.get('urls', [])
-        added = 0
-        for url in urls:
-            url = url.strip()
-            if url and M3U8Sites.VaildateUrl(url):
-                dlmgr.add_item(url, state='等待中')
-                dlmgr.enqueue(url, state.dest)
-                added += 1
-        return JSONResponse({'ok': True, 'added': added})
-
-    ui.run(
-        title='JableTV & MissAV Downloader — by ALOS',
-        port=8088,
-        reload=False,
-        show=True,
-        dark=True,
-        favicon='🎬',
-    )
+def gui_modern_main(url: str = '', dest: str = 'download'):
+    app = ModernApp(url=url, dest=dest)
+    app.mainloop()
