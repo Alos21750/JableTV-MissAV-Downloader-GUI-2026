@@ -38,8 +38,8 @@ TAG_SLUG = 'chinese-subtitle'
 TAG_URL = f'https://jable.tv/tags/{TAG_SLUG}/'
 BASELINE_DATE = '2026-04-01'
 CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
-FIRST_RUN_SCAN_PAGES = 3           # cover April backlog on first ever run
-DAILY_SCAN_PAGES = 2               # a bit of overlap in case of late uploads
+MAX_SCAN_PAGES = 50                # safety cap to avoid infinite scanning
+DAILY_SCAN_PAGES = 3               # a bit of overlap in case of late uploads
 MAX_CONCURRENT = 2
 
 # State files live next to the exe for portability
@@ -164,26 +164,35 @@ class SmallToolWorker:
         os.makedirs(dest, exist_ok=True)
 
         first_run = not cfg.get('first_run_done', False)
-        pages = FIRST_RUN_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
 
-        self._log(
-            f'Scanning {pages} page(s) of 中文字幕 '
-            f'({"first run — grabbing recent backlog" if first_run else "daily check"})...'
-        )
+        if first_run:
+            self._log(
+                f'First run — scanning ALL 中文字幕 pages since {BASELINE_DATE}...'
+            )
+        else:
+            self._log(
+                f'Daily check — scanning up to {DAILY_SCAN_PAGES} page(s) of 中文字幕...'
+            )
 
         new_videos = []
-        for page in range(1, pages + 1):
+        max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
+
+        for page in range(1, max_pages + 1):
             if self._stop.is_set():
                 return
             url = TAG_URL if page == 1 else f'{TAG_URL}?from={page}'
+            self._log(f'Fetching page {page}: {url}')
             try:
                 videos = JableTVBrowser.fetch_page(url)
             except Exception as e:
                 self._log(f'[WARN] page {page} fetch failed: {e}')
                 continue
             if not videos:
-                self._log(f'Page {page}: no videos returned.')
+                self._log(f'Page {page}: no videos returned — reached end.')
                 break
+
+            self._log(f'Page {page}: got {len(videos)} video(s).')
+            page_all_seen = True
             for v in videos:
                 vurl = v.get('url', '')
                 if not vurl:
@@ -191,10 +200,16 @@ class SmallToolWorker:
                 with self._seen_lock:
                     if vurl in self._seen:
                         continue
+                page_all_seen = False
                 new_videos.append(v)
 
+            # Daily mode: stop if all videos on this page are already seen
+            if not first_run and page_all_seen:
+                self._log('All videos on this page already seen — stopping.')
+                break
+
         if not new_videos:
-            self._log('No new videos.')
+            self._log('No new videos found.')
             cfg['first_run_done'] = True
             save_config(cfg)
             return
