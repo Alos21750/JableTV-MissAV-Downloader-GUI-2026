@@ -15,7 +15,14 @@ except Exception:
         pass
 
 from args import *
-from gui import *
+
+# Use modern CustomTkinter GUI by default; fall back to basic tkinter if unavailable
+try:
+    from gui_modern import gui_modern_main as _gui_main
+    _USE_MODERN = True
+except ImportError:
+    from gui import gui_main as _gui_main
+    _USE_MODERN = False
 
 ''' Default folder to save the download files
     "" or None : same as the url's last stem,  ie:  "abc-001" for url = "https://jable.tv/videos/abc-001/"
@@ -36,7 +43,10 @@ if __name__ == "__main__":
 
     if args.nogui:
         M3U8Sites.consoles_main(url_arg, save_folder)
+    elif _USE_MODERN:
+        _gui_main(url_arg, save_folder)
     else:
+        from gui import gui_main
         gui_main(url_arg, save_folder)
 
     sys.exit(0)

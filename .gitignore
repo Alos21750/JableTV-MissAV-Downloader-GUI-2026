@@ -7,6 +7,7 @@ build_tmp/
 dist/
 release/*
 !release/*.exe
+!release/*.zip
 download/
 MakeEXE.bat
 desktop.ini
