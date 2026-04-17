@@ -43,7 +43,8 @@ except Exception:
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
 TAG_SLUG = 'chinese-subtitle'
-TAG_URL = f'https://jable.tv/tags/{TAG_SLUG}/'
+# Chinese-subtitle lives under /categories/ on jable.tv, not /tags/
+TAG_URL = f'https://jable.tv/categories/{TAG_SLUG}/'
 BASELINE_DATE = '2026-04-01'
 CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
 MAX_SCAN_PAGES = 50                # safety cap to avoid infinite scanning
@@ -417,7 +418,7 @@ class SmallToolApp(tk.Tk):
         # Info line
         info = tk.Label(
             self,
-            text=(f'監看標籤: 中文字幕 ({TAG_URL})   |   '
+            text=(f'監看分類: 中文字幕 ({TAG_URL})   |   '
                   f'每 24 小時自動檢查一次   |   '
                   f'基準日期: {BASELINE_DATE}'),
             bg=BG_DARK, fg=TEXT_DIM, font=('Microsoft YaHei', 9),
