@@ -69,7 +69,10 @@ class DownloadManager:
         self._pending: list[tuple[str, str]] = []
         self._active: dict[str, object] = {}
         self._items: dict[str, DownloadItem] = {}
-        self._lock = threading.Lock()
+        # RLock: enqueue() and cancel_all() call _set_state() while holding
+        # the lock — a plain Lock would deadlock the caller (often the main
+        # GUI thread, freezing the app).
+        self._lock = threading.RLock()
         self._max_concurrent = max_concurrent
         self._prep_sem = threading.Semaphore(1)
 
@@ -921,9 +924,12 @@ class ModernApp(ctk.CTk):
         dest = self._dest_var.get() or 'download'
         count = 0
         for item in self._dlmgr.get_items():
-            if item.state not in ('已下載', '下載中', '準備中', '等待中'):
-                self._dlmgr.enqueue(item.url, dest)
-                count += 1
+            # Skip items that are already active or completed; queued ('等待中')
+            # items still need enqueue() to (re)start them.
+            if item.state in ('已下載', '下載中', '準備中'):
+                continue
+            self._dlmgr.enqueue(item.url, dest)
+            count += 1
         if count:
             print(f'已加入 {count} 個下載任務')
 

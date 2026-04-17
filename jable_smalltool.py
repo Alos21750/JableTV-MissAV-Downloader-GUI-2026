@@ -32,6 +32,14 @@ except Exception:
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 
+# Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
+try:
+    import cloudscraper
+    from bs4 import BeautifulSoup
+except Exception:
+    cloudscraper = None
+    BeautifulSoup = None
+
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
 TAG_SLUG = 'chinese-subtitle'
@@ -156,6 +164,65 @@ class SmallToolWorker:
                 waited += 5
         self._log('Worker stopped.')
 
+    def _verbose_fetch_page(self, url: str) -> list:
+        """Like JableTVBrowser.fetch_page but logs exactly why it returns empty.
+        Helps diagnose Cloudflare challenges, site structure changes, etc."""
+        if cloudscraper is None or BeautifulSoup is None:
+            # Fall back to JableTVBrowser without diagnostics
+            try:
+                return JableTVBrowser.fetch_page(url)
+            except Exception as e:
+                self._log(f'  [ERR] fetch failed: {e}')
+                return []
+        try:
+            scraper = JableTVBrowser._get_scraper()
+            r = scraper.get(url, timeout=30)
+        except Exception as e:
+            self._log(f'  [ERR] HTTP request failed: {type(e).__name__}: {e}')
+            return []
+
+        self._log(f'  HTTP {r.status_code}, body={len(r.content)} bytes')
+        if r.status_code != 200:
+            snippet = (r.text or '')[:200].replace('\n', ' ')
+            self._log(f'  Body snippet: {snippet}')
+            return []
+
+        try:
+            soup = BeautifulSoup(r.content, 'html.parser')
+        except Exception as e:
+            self._log(f'  [ERR] HTML parse failed: {e}')
+            return []
+
+        divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
+        if divlist is None:
+            # Check for Cloudflare challenge indicators
+            title = soup.title.string if soup.title else ''
+            has_cf = ('cloudflare' in r.text.lower() or
+                      'just a moment' in r.text.lower() or
+                      'challenge' in r.text.lower())
+            self._log(
+                f'  [WARN] list_videos div not found. '
+                f'title="{title}" cloudflare_indicators={has_cf}'
+            )
+            return []
+
+        cards = divlist.select('div.video-img-box')
+        videos = []
+        for card in cards:
+            detail = card.select_one('div.detail')
+            if not detail or not detail.h6 or not detail.h6.a:
+                continue
+            tag_a = detail.h6.a
+            img = card.select_one('img')
+            duration_span = card.select_one('span.label')
+            videos.append({
+                'url': tag_a.get('href', ''),
+                'title': str(tag_a.string or ''),
+                'thumbnail': img.get('data-src', '') if img else '',
+                'duration': duration_span.string if duration_span else '',
+            })
+        return videos
+
     def _scan_and_download(self, cfg: dict):
         dest = cfg.get('output_folder') or ''
         if not dest:
@@ -183,7 +250,7 @@ class SmallToolWorker:
             url = TAG_URL if page == 1 else f'{TAG_URL}?from={page}'
             self._log(f'Fetching page {page}: {url}')
             try:
-                videos = JableTVBrowser.fetch_page(url)
+                videos = self._verbose_fetch_page(url)
             except Exception as e:
                 self._log(f'[WARN] page {page} fetch failed: {e}')
                 continue
