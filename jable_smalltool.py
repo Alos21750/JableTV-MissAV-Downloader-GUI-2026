@@ -16,7 +16,8 @@ import sys
 import threading
 import time
 import tkinter as tk
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
 from tkinter import filedialog, messagebox, scrolledtext
 from typing import Optional
 
@@ -32,14 +33,28 @@ except Exception:
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 
+# Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
+try:
+    import cloudscraper
+    from bs4 import BeautifulSoup
+except Exception:
+    cloudscraper = None
+    BeautifulSoup = None
+
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
 TAG_SLUG = 'chinese-subtitle'
-TAG_URL = f'https://jable.tv/tags/{TAG_SLUG}/'
+# Chinese-subtitle lives under /categories/ on jable.tv, not /tags/
+# sort_by=post_date puts newest first so we can stop once we hit old videos.
+TAG_URL = f'https://jable.tv/categories/{TAG_SLUG}/'
+TAG_URL_SORTED = f'{TAG_URL}?sort_by=post_date'
 BASELINE_DATE = '2026-04-01'
+BASELINE_DT = datetime(2026, 4, 1, tzinfo=timezone.utc)
+# Polite delay between per-video detail-page fetches to avoid hammering the site
+PER_VIDEO_FETCH_DELAY_SEC = 0.3
 CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
-FIRST_RUN_SCAN_PAGES = 3           # cover April backlog on first ever run
-DAILY_SCAN_PAGES = 2               # a bit of overlap in case of late uploads
+MAX_SCAN_PAGES = 50                # safety cap to avoid infinite scanning
+DAILY_SCAN_PAGES = 3               # a bit of overlap in case of late uploads
 MAX_CONCURRENT = 2
 
 # State files live next to the exe for portability
@@ -156,6 +171,155 @@ class SmallToolWorker:
                 waited += 5
         self._log('Worker stopped.')
 
+    # Chinese numerals → int. Covers the range jable.tv actually emits
+    # (relative-time counts are small; '十一' = 11 is enough).
+    _CN_NUMS = {
+        '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+    }
+
+    @classmethod
+    def _parse_cn_number(cls, s: str) -> Optional[int]:
+        """Parse a small Chinese number literal like '一', '十', '十二', '二十'."""
+        if not s:
+            return None
+        if '十' in s:
+            # 十 = 10; 十X = 1X; X十 = X0; X十Y = XY
+            parts = s.split('十')
+            left = parts[0]
+            right = parts[1] if len(parts) > 1 else ''
+            tens = cls._CN_NUMS.get(left, 1) if left else 1
+            ones = cls._CN_NUMS.get(right, 0) if right else 0
+            return tens * 10 + ones
+        if len(s) == 1 and s in cls._CN_NUMS:
+            return cls._CN_NUMS[s]
+        return None
+
+    @classmethod
+    def _parse_relative_date(cls, rel_text: str, now: Optional[datetime] = None) -> Optional[datetime]:
+        """Parse jable.tv's relative time strings.
+
+        Handles Arabic ('5 小時前', '3 個月前') AND Chinese-numeral
+        ('一星期前', '兩個月前') variants, and both 星期/週/周 for week.
+        Returns an absolute UTC datetime, or None if unparseable.
+        """
+        if not rel_text:
+            return None
+        if now is None:
+            now = datetime.now(timezone.utc)
+        m = re.match(
+            r'\s*(\d+|[一二兩三四五六七八九十]+)'
+            r'\s*(個)?\s*'
+            r'(分鐘|小時|天|星期|週|周|個?月|個?年)\s*前',
+            rel_text,
+        )
+        if not m:
+            return None
+        num_raw = m.group(1)
+        if num_raw.isdigit():
+            n = int(num_raw)
+        else:
+            n = cls._parse_cn_number(num_raw)
+            if n is None:
+                return None
+        unit = m.group(3)
+        if unit == '分鐘':
+            delta = timedelta(minutes=n)
+        elif unit == '小時':
+            delta = timedelta(hours=n)
+        elif unit == '天':
+            delta = timedelta(days=n)
+        elif unit in ('星期', '週', '周'):
+            delta = timedelta(weeks=n)
+        elif unit in ('月', '個月'):
+            delta = timedelta(days=n * 30)  # approximate
+        elif unit in ('年', '個年'):
+            delta = timedelta(days=n * 365)  # approximate
+        else:
+            return None
+        return now - delta
+
+    def _fetch_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
+        """Fetch a video detail page and extract its post datetime.
+        Returns (datetime or None, raw_relative_text)."""
+        if cloudscraper is None or BeautifulSoup is None:
+            return (None, '')
+        try:
+            scraper = JableTVBrowser._get_scraper()
+            r = scraper.get(vurl, timeout=30)
+            if r.status_code != 200:
+                return (None, f'HTTP {r.status_code}')
+            soup = BeautifulSoup(r.content, 'html.parser')
+            info = soup.find(class_='info-header')
+            if not info:
+                return (None, '')
+            span = info.find('span', class_='mr-3')
+            if not span:
+                return (None, '')
+            rel_text = span.get_text(strip=True)
+            return (self._parse_relative_date(rel_text), rel_text)
+        except Exception as e:
+            return (None, f'ERR:{type(e).__name__}')
+
+    def _verbose_fetch_page(self, url: str) -> list:
+        """Like JableTVBrowser.fetch_page but logs exactly why it returns empty.
+        Helps diagnose Cloudflare challenges, site structure changes, etc."""
+        if cloudscraper is None or BeautifulSoup is None:
+            # Fall back to JableTVBrowser without diagnostics
+            try:
+                return JableTVBrowser.fetch_page(url)
+            except Exception as e:
+                self._log(f'  [ERR] fetch failed: {e}')
+                return []
+        try:
+            scraper = JableTVBrowser._get_scraper()
+            r = scraper.get(url, timeout=30)
+        except Exception as e:
+            self._log(f'  [ERR] HTTP request failed: {type(e).__name__}: {e}')
+            return []
+
+        self._log(f'  HTTP {r.status_code}, body={len(r.content)} bytes')
+        if r.status_code != 200:
+            snippet = (r.text or '')[:200].replace('\n', ' ')
+            self._log(f'  Body snippet: {snippet}')
+            return []
+
+        try:
+            soup = BeautifulSoup(r.content, 'html.parser')
+        except Exception as e:
+            self._log(f'  [ERR] HTML parse failed: {e}')
+            return []
+
+        divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
+        if divlist is None:
+            # Check for Cloudflare challenge indicators
+            title = soup.title.string if soup.title else ''
+            has_cf = ('cloudflare' in r.text.lower() or
+                      'just a moment' in r.text.lower() or
+                      'challenge' in r.text.lower())
+            self._log(
+                f'  [WARN] list_videos div not found. '
+                f'title="{title}" cloudflare_indicators={has_cf}'
+            )
+            return []
+
+        cards = divlist.select('div.video-img-box')
+        videos = []
+        for card in cards:
+            detail = card.select_one('div.detail')
+            if not detail or not detail.h6 or not detail.h6.a:
+                continue
+            tag_a = detail.h6.a
+            img = card.select_one('img')
+            duration_span = card.select_one('span.label')
+            videos.append({
+                'url': tag_a.get('href', ''),
+                'title': str(tag_a.string or ''),
+                'thumbnail': img.get('data-src', '') if img else '',
+                'duration': duration_span.string if duration_span else '',
+            })
+        return videos
+
     def _scan_and_download(self, cfg: dict):
         dest = cfg.get('output_folder') or ''
         if not dest:
@@ -164,37 +328,84 @@ class SmallToolWorker:
         os.makedirs(dest, exist_ok=True)
 
         first_run = not cfg.get('first_run_done', False)
-        pages = FIRST_RUN_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
 
-        self._log(
-            f'Scanning {pages} page(s) of 中文字幕 '
-            f'({"first run — grabbing recent backlog" if first_run else "daily check"})...'
-        )
+        if first_run:
+            self._log(
+                f'First run — scanning ALL 中文字幕 pages since {BASELINE_DATE}...'
+            )
+        else:
+            self._log(
+                f'Daily check — scanning up to {DAILY_SCAN_PAGES} page(s) of 中文字幕...'
+            )
 
         new_videos = []
-        for page in range(1, pages + 1):
+        max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
+        reached_baseline = False  # hit a video older than BASELINE_DT — stop scanning
+
+        for page in range(1, max_pages + 1):
             if self._stop.is_set():
                 return
-            url = TAG_URL if page == 1 else f'{TAG_URL}?from={page}'
+            if reached_baseline:
+                break
+            # Sort by post_date (newest first) so date-based stopping works.
+            if page == 1:
+                url = TAG_URL_SORTED
+            else:
+                url = f'{TAG_URL_SORTED}&from={page}'
+            self._log(f'Fetching page {page}: {url}')
             try:
-                videos = JableTVBrowser.fetch_page(url)
+                videos = self._verbose_fetch_page(url)
             except Exception as e:
                 self._log(f'[WARN] page {page} fetch failed: {e}')
                 continue
             if not videos:
-                self._log(f'Page {page}: no videos returned.')
+                self._log(f'Page {page}: no videos returned — reached end.')
                 break
+
+            self._log(f'Page {page}: got {len(videos)} video(s). Checking dates...')
+            page_all_seen = True
             for v in videos:
+                if self._stop.is_set():
+                    return
                 vurl = v.get('url', '')
                 if not vurl:
                     continue
                 with self._seen_lock:
                     if vurl in self._seen:
                         continue
+                page_all_seen = False
+
+                # Check the release date before queuing
+                video_dt, rel_text = self._fetch_video_date(vurl)
+                time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
+                if video_dt is None:
+                    # Couldn't parse — skip conservatively (don't download
+                    # something we can't date-verify, don't mark as seen so
+                    # we retry next cycle).
+                    self._log(f'  [SKIP] could not parse date ({rel_text!r}): {vurl}')
+                    continue
+                if video_dt < BASELINE_DT:
+                    # Since list is sorted by post_date desc, everything after
+                    # this is also older. Stop scanning entirely.
+                    self._log(
+                        f'  [STOP] {vurl.rstrip("/").split("/")[-1]} is from '
+                        f'{rel_text} (before {BASELINE_DATE}). Stopping scan.'
+                    )
+                    # Mark as seen so we don't re-fetch its date next cycle
+                    self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                    reached_baseline = True
+                    break
+
+                self._log(f'  [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
                 new_videos.append(v)
 
+            # Daily mode: also stop if all videos on this page are already seen
+            if not first_run and page_all_seen and not reached_baseline:
+                self._log('All videos on this page already seen — stopping.')
+                break
+
         if not new_videos:
-            self._log('No new videos.')
+            self._log(f'No new videos after {BASELINE_DATE}.')
             cfg['first_run_done'] = True
             save_config(cfg)
             return
@@ -335,7 +546,7 @@ class SmallToolApp(tk.Tk):
         # Info line
         info = tk.Label(
             self,
-            text=(f'監看標籤: 中文字幕 ({TAG_URL})   |   '
+            text=(f'監看分類: 中文字幕 ({TAG_URL})   |   '
                   f'每 24 小時自動檢查一次   |   '
                   f'基準日期: {BASELINE_DATE}'),
             bg=BG_DARK, fg=TEXT_DIM, font=('Microsoft YaHei', 9),

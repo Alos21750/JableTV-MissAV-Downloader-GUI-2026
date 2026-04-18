@@ -39,6 +39,7 @@ FONT_MONO = ('Consolas', 10)
 FONT_TITLE = ('Microsoft YaHei', 14, 'bold')
 FONT_SEC_TITLE = ('Microsoft YaHei', 11, 'bold')
 
+DEFAULT_CONCURRENT = 2
 MAX_CONCURRENT = 10
 
 
@@ -318,18 +319,32 @@ class DownloadQueue(ttk.Treeview):
 
 # ── Download Manager (10 parallel) ───────────────────────────────────────
 class _DownloadManager:
-    """Runs up to MAX_CONCURRENT downloads. Excess items are queued."""
+    """Runs up to max_concurrent downloads. Excess items are queued."""
 
-    def __init__(self, widget, on_state, on_progress):
+    def __init__(self, widget, on_state, on_progress,
+                 max_concurrent=DEFAULT_CONCURRENT):
         self._widget = widget          # for .after() scheduling
         self._on_state = on_state      # (url, state, **kw)
         self._on_progress = on_progress  # (url, done, total, speed)
         self._pending = []             # [(url, dest), ...]
         self._active = {}              # url -> job
         self._lock = threading.Lock()
+        self._max_concurrent = max_concurrent
         # Gate: only 1 item can query the site at a time (prevents
         # CloudFlare rate-limiting when many downloads are queued)
         self._prep_sem = threading.Semaphore(1)
+
+    @property
+    def max_concurrent(self):
+        return self._max_concurrent
+
+    @max_concurrent.setter
+    def max_concurrent(self, value):
+        self._max_concurrent = max(1, min(value, MAX_CONCURRENT))
+        # If we lowered the limit, extra active downloads finish naturally.
+        # If we raised it, kick off pending items.
+        for _ in range(value):
+            self._try_next()
 
     @property
     def active_count(self):
@@ -347,7 +362,7 @@ class _DownloadManager:
                 return
             if any(u == url for u, _ in self._pending):
                 return
-            if len(self._active) < MAX_CONCURRENT:
+            if len(self._active) < self._max_concurrent:
                 self._active[url] = None  # placeholder
                 threading.Thread(target=self._run, args=(url, dest),
                                  daemon=True).start()
@@ -419,7 +434,7 @@ class _DownloadManager:
 
     def _try_next(self):
         with self._lock:
-            if not self._pending or len(self._active) >= MAX_CONCURRENT:
+            if not self._pending or len(self._active) >= self._max_concurrent:
                 return
             url, dest = self._pending.pop(0)
             self._active[url] = None
@@ -465,7 +480,7 @@ class MainWindow(tk.Tk):
         self._queue_tree.load_csv(self.CSV_PATH)
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
-        threading.Thread(target=self._clipboard_monitor, daemon=True).start()
+        self.after(800, self._clipboard_monitor)
 
         if url:
             self._url_var.set(url)
@@ -651,10 +666,20 @@ class MainWindow(tk.Tk):
         row3.pack(fill='x', pady=4)
         tk.Label(row3, text='同時下載數', bg=BG_SECTION, fg=TEXT_SEC,
                  font=FONT_SM, width=12, anchor='e').pack(side=tk.LEFT)
-        tk.Label(row3, text=str(MAX_CONCURRENT), bg=BG_SECTION,
-                 fg=TEXT_PRI, font=FONT_SM).pack(side=tk.LEFT, padx=(8, 0))
-        tk.Label(row3, text='(固定)', bg=BG_SECTION, fg=TEXT_DIM,
-                 font=FONT_SM).pack(side=tk.LEFT, padx=(8, 0))
+        self._conc_var = tk.StringVar(value=str(DEFAULT_CONCURRENT))
+        conc_opts = [str(i) for i in range(1, MAX_CONCURRENT + 1)]
+        cm = tk.OptionMenu(row3, self._conc_var, *conc_opts,
+                           command=self._on_conc_change)
+        cm.config(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
+                  activeforeground=TEXT_PRI, relief='flat',
+                  highlightthickness=1, highlightbackground=BORDER,
+                  font=FONT_SM, bd=0, width=4)
+        cm['menu'].config(bg=BG_CARD, fg=TEXT_PRI,
+                          activebackground=ACCENT,
+                          activeforeground='#fff', font=FONT_SM)
+        cm.pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(row3, text=f'(最多 {MAX_CONCURRENT})', bg=BG_SECTION,
+                 fg=TEXT_DIM, font=FONT_SM).pack(side=tk.LEFT, padx=(8, 0))
 
         # ── About section ─────────────────────────────────────────
         grp2 = tk.LabelFrame(outer, text='關於', bg=BG_SECTION,
@@ -687,6 +712,12 @@ class MainWindow(tk.Tk):
         self._update_status()
 
     # ── Download helpers ─────────────────────────────────────────────────
+
+    def _on_conc_change(self, val):
+        n = int(val)
+        self._dlmgr.max_concurrent = n
+        self._update_status()
+        print(f'同時下載數: {n}', flush=True)
 
     def _on_speed_change(self, val):
         from M3U8Sites.M3U8Crawler import speed_limiter
@@ -818,7 +849,7 @@ class MainWindow(tk.Tk):
         p = self._dlmgr.pending_count
         parts = []
         if a:
-            parts.append(f'下載中 {a}/{MAX_CONCURRENT}')
+            parts.append(f'下載中 {a}/{self._dlmgr.max_concurrent}')
         if p:
             parts.append(f'等待中 {p}')
         done = sum(1 for iid in self._queue_tree.get_children()
@@ -843,22 +874,24 @@ class MainWindow(tk.Tk):
                         count += 1
         print(f'已載入 {count} 個網址')
 
-    # ── Clipboard monitor ────────────────────────────────────────────────
+    # ── Clipboard monitor (main-thread safe) ────────────────────────────
 
     def _clipboard_monitor(self):
-        while not self._is_closing:
-            try:
-                clp = self.clipboard_get()
-                if clp != self._clp_text:
-                    self._clp_text = clp
-                    for m in re.finditer(r'https?://\S+', clp):
-                        url = m.group(0).rstrip('.,;)\'"')
-                        if M3U8Sites.VaildateUrl(url) and \
-                                not self._queue_tree.exists_url(url):
-                            self.after(0, lambda u=url: self._add_url(u, False))
-            except Exception:
-                pass
-            time.sleep(0.8)
+        """Poll clipboard on the main thread via .after() to avoid TclError."""
+        if self._is_closing:
+            return
+        try:
+            clp = self.clipboard_get()
+            if clp != self._clp_text:
+                self._clp_text = clp
+                for m in re.finditer(r'https?://\S+', clp):
+                    url = m.group(0).rstrip('.,;)\'"')
+                    if M3U8Sites.VaildateUrl(url) and \
+                            not self._queue_tree.exists_url(url):
+                        self._add_url(url, False)
+        except (tk.TclError, Exception):
+            pass
+        self.after(800, self._clipboard_monitor)
 
     # ── Console ──────────────────────────────────────────────────────────
 

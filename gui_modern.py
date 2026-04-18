@@ -69,7 +69,10 @@ class DownloadManager:
         self._pending: list[tuple[str, str]] = []
         self._active: dict[str, object] = {}
         self._items: dict[str, DownloadItem] = {}
-        self._lock = threading.Lock()
+        # RLock: enqueue() and cancel_all() call _set_state() while holding
+        # the lock — a plain Lock would deadlock the caller (often the main
+        # GUI thread, freezing the app).
+        self._lock = threading.RLock()
         self._max_concurrent = max_concurrent
         self._prep_sem = threading.Semaphore(1)
 
@@ -316,6 +319,7 @@ class ModernApp(ctk.CTk):
         self._selected_urls: set = set()
         self._sidebar_expanded: dict[str, bool] = {}
         self._grid_gen: int = 0  # bumps on each page refresh so stale thumbs are dropped
+        self._card_widgets: dict = {}  # url -> {card, sel_btn}
         self._dl_rows: dict = {}   # url -> {row, state_lbl, name_lbl, pb, pct, spd, remove}
         self._dl_empty_lbl = None
 
@@ -651,6 +655,7 @@ class ModernApp(ctk.CTk):
     def _refresh_grid(self):
         for w in self._grid_scroll.winfo_children():
             w.destroy()
+        self._card_widgets = {}  # url -> {card, sel_btn}
 
         if not self._videos:
             ctk.CTkLabel(self._grid_scroll, text='沒有找到影片',
@@ -713,13 +718,26 @@ class ModernApp(ctk.CTk):
             bottom.pack(fill='x', padx=8, pady=(0, 8))
 
             sel_text = '✓ 已選' if is_sel else '選取'
-            ctk.CTkButton(
+            sel_btn = ctk.CTkButton(
                 bottom, text=sel_text, width=60, height=24,
                 fg_color=ACCENT if is_sel else BG_INPUT,
                 hover_color=ACCENT_HOVER,
                 font=('Microsoft YaHei', 9),
                 command=lambda u=url: self._toggle_select(u)
-            ).pack(side='right')
+            )
+            sel_btn.pack(side='right')
+
+            # Store widget refs for in-place selection updates
+            self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
+
+            # Make the entire card clickable for selection
+            def _bind_click(widget, video_url=url):
+                widget.bind('<Button-1>', lambda e, u=video_url: self._toggle_select(u))
+                # Cursor change to indicate clickability
+                widget.configure(cursor='hand2')
+            _bind_click(card)
+            _bind_click(thumb_holder)
+            _bind_click(thumb_lbl)
 
             # Kick off background thumbnail load
             if thumb_url:
@@ -757,7 +775,17 @@ class ModernApp(ctk.CTk):
             self._selected_urls.discard(url)
         else:
             self._selected_urls.add(url)
-        self._refresh_grid()
+        # Update the specific card in-place (no full grid rebuild)
+        w = self._card_widgets.get(url)
+        if w:
+            is_sel = url in self._selected_urls
+            try:
+                w['card'].configure(border_color=ACCENT if is_sel else BORDER)
+                w['sel_btn'].configure(
+                    text='✓ 已選' if is_sel else '選取',
+                    fg_color=ACCENT if is_sel else BG_INPUT)
+            except Exception:
+                pass
         n = len(self._selected_urls)
         self._sel_lbl.configure(text=f'已選 {n} 部' if n else '')
 
@@ -896,9 +924,12 @@ class ModernApp(ctk.CTk):
         dest = self._dest_var.get() or 'download'
         count = 0
         for item in self._dlmgr.get_items():
-            if item.state not in ('已下載', '下載中', '準備中', '等待中'):
-                self._dlmgr.enqueue(item.url, dest)
-                count += 1
+            # Skip items that are already active or completed; queued ('等待中')
+            # items still need enqueue() to (re)start them.
+            if item.state in ('已下載', '下載中', '準備中'):
+                continue
+            self._dlmgr.enqueue(item.url, dest)
+            count += 1
         if count:
             print(f'已加入 {count} 個下載任務')
 
