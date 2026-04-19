@@ -12,10 +12,12 @@ Author: ALOS
 import ctypes
 import json
 import os
+import shutil
 import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.ttk as ttk
 import re
 from datetime import datetime, timezone, timedelta
 from tkinter import filedialog, messagebox, scrolledtext
@@ -167,6 +169,12 @@ class SmallToolWorker:
         self._thread: Optional[threading.Thread] = None
         self._seen = load_seen()
         self._seen_lock = threading.Lock()
+        self._progress = None  # (done, total, speed_bps, title) or None
+        self._progress_lock = threading.Lock()
+
+    def get_progress(self):
+        with self._progress_lock:
+            return self._progress
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -425,20 +433,52 @@ class SmallToolWorker:
         title = video.get('title', '') or vurl.rstrip('/').split('/')[-1]
         site = video.get('_site', '?')
         self._log(f'↓ [{site}] {title}')
+
+        # Show "preparing" state on progress bar
+        with self._progress_lock:
+            self._progress = (0, 0, 0, title)
+
+        site_obj = None
         try:
             site_obj = M3U8Sites.CreateSite(vurl, dest)
             if not site_obj or not site_obj.is_url_vaildate():
                 self._log(f'  [SKIP] invalid URL: {vurl}')
                 self._mark_seen(vurl, title, skipped=True)
                 return
+
+            # Wire up progress callback for the progress bar
+            def _on_progress(done, total, speed):
+                with self._progress_lock:
+                    self._progress = (done, total, speed, title)
+
+            site_obj._progress_callback = _on_progress
             site_obj.start_download()
+
             if getattr(site_obj, '_cancel_job', False):
                 self._log('  [CANCELLED]')
+                self._cleanup_temp(site_obj)
                 return
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title)
         except Exception as e:
             self._log(f'  [ERR] {e}')
+            if site_obj:
+                self._cleanup_temp(site_obj)
+        finally:
+            with self._progress_lock:
+                self._progress = None
+
+    def _cleanup_temp(self, site_obj):
+        """Remove temp folder with partial segment clips if final video doesn't exist."""
+        try:
+            if site_obj.is_target_video_exist():
+                return  # Video completed, nothing to clean
+            temp = getattr(site_obj, '_temp_folder', None)
+            if temp and os.path.isdir(temp):
+                shutil.rmtree(temp, ignore_errors=True)
+                self._log(f'  [CLEANUP] removed partial clips')
+        except Exception:
+            pass
 
     def _mark_seen(self, url: str, title: str, skipped: bool = False):
         with self._seen_lock:
@@ -474,6 +514,7 @@ class SmallToolApp(tk.Tk):
             self._start_worker()
 
         self.after(300, self._flush_log_queue)
+        self.after(500, self._refresh_progress)
 
     def _build_ui(self):
         # ── Header ──────────────────────────────────────────────────
@@ -619,6 +660,43 @@ class SmallToolApp(tk.Tk):
             font=('Microsoft JhengHei', 10))
         self._status_lbl.pack(side='right')
 
+        # ── Download progress bar ───────────────────────────────────
+        prog_outer = tk.Frame(self, bg=BG_CARD, padx=10, pady=6)
+        prog_outer.pack(fill='x', padx=14, pady=(0, 4))
+
+        self._prog_title = tk.Label(prog_outer, text='',
+                                     bg=BG_CARD, fg=TEXT_PRI,
+                                     font=('Microsoft JhengHei', 9),
+                                     anchor='w')
+        self._prog_title.pack(fill='x')
+
+        bar_row = tk.Frame(prog_outer, bg=BG_CARD)
+        bar_row.pack(fill='x', pady=(3, 0))
+
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure('DL.Horizontal.TProgressbar',
+                        troughcolor=BG_INPUT,
+                        background=ACCENT,
+                        thickness=16)
+
+        self._prog_bar = ttk.Progressbar(
+            bar_row, style='DL.Horizontal.TProgressbar',
+            maximum=100, value=0, mode='determinate')
+        self._prog_bar.pack(side='left', fill='x', expand=True)
+
+        self._prog_pct = tk.Label(bar_row, text='',
+                                   bg=BG_CARD, fg=ACCENT,
+                                   font=('Consolas', 11, 'bold'),
+                                   width=5, anchor='e')
+        self._prog_pct.pack(side='left', padx=(8, 0))
+
+        self._prog_info = tk.Label(bar_row, text='',
+                                    bg=BG_CARD, fg=TEXT_SEC,
+                                    font=('Consolas', 9),
+                                    anchor='e')
+        self._prog_info.pack(side='right')
+
         # ── Log box ─────────────────────────────────────────────────
         self._log_box = scrolledtext.ScrolledText(
             self, bg=BG_CARD, fg=TEXT_PRI,
@@ -753,6 +831,31 @@ class SmallToolApp(tk.Tk):
             self._log_box.see('end')
             self._log_box.configure(state='disabled')
         self.after(300, self._flush_log_queue)
+
+    def _refresh_progress(self):
+        prog = self._worker.get_progress()
+        if prog:
+            done, total, speed, title = prog
+            if total > 0:
+                pct = int(done * 100 / total)
+                self._prog_bar['value'] = pct
+                self._prog_pct.configure(text=f'{pct}%')
+                speed_str = (f'{speed / 1024:.0f} KB/s' if speed < 1024 * 1024
+                             else f'{speed / 1024 / 1024:.1f} MB/s')
+                self._prog_info.configure(text=f'{done}/{total} | {speed_str}')
+            else:
+                # Preparing phase (0, 0, ...)
+                self._prog_bar['value'] = 0
+                self._prog_pct.configure(text='')
+                self._prog_info.configure(text='Preparing...')
+            short = title[:50] + '...' if len(title) > 50 else title
+            self._prog_title.configure(text=f'↓ {short}')
+        else:
+            self._prog_bar['value'] = 0
+            self._prog_pct.configure(text='')
+            self._prog_info.configure(text='')
+            self._prog_title.configure(text='')
+        self.after(500, self._refresh_progress)
 
     def _on_close(self):
         self._save_selections_to_config()
