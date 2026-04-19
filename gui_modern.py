@@ -469,6 +469,11 @@ class ModernApp(ctk.CTk):
         self._sel_lbl = ctk.CTkLabel(right, text='', text_color=ACCENT,
                                       font=('Microsoft JhengHei', 11, 'bold'))
         self._sel_lbl.pack(side='right', padx=8)
+        ctk.CTkButton(right, text=T('select_all_btn'), command=self._select_all_on_page,
+                      width=80, height=32, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER,
+                      text_color=TEXT_PRI).pack(side='right', padx=4)
         ctk.CTkButton(right, text=T('download_selected'), command=self._download_selected,
                       width=100, height=32, corner_radius=6,
                       fg_color=ACCENT,
@@ -526,6 +531,24 @@ class ModernApp(ctk.CTk):
                       hover_color=ACCENT_HOVER,
                       command=lambda: self._goto_page(self._page + 1)
                       ).pack(side='left', padx=3)
+
+        # Page jump input
+        ctk.CTkFrame(nav_inner, width=1, fg_color=BORDER).pack(
+            side='left', fill='y', pady=4, padx=10)
+        self._page_jump_var = ctk.StringVar(value='')
+        page_entry = ctk.CTkEntry(nav_inner, textvariable=self._page_jump_var,
+                                   width=50, height=30, corner_radius=6,
+                                   fg_color=BG_INPUT, border_color=BORDER,
+                                   border_width=1, text_color=TEXT_PRI,
+                                   placeholder_text='#',
+                                   justify='center')
+        page_entry.pack(side='left', padx=3)
+        page_entry.bind('<Return>', lambda e: self._jump_to_page())
+        ctk.CTkButton(nav_inner, text='Go', width=40, height=30,
+                      corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._jump_to_page).pack(side='left', padx=3)
 
         self._rebuild_sidebar()
 
@@ -930,6 +953,26 @@ class ModernApp(ctk.CTk):
         self._page = p
         self._load_page()
 
+    def _jump_to_page(self):
+        """Jump to page number entered in the page-jump field."""
+        try:
+            p = int(self._page_jump_var.get().strip())
+            if p >= 1:
+                self._goto_page(p)
+        except (ValueError, TypeError):
+            pass
+        self._page_jump_var.set('')
+
+    def _select_all_on_page(self):
+        """Select all videos currently displayed on the page."""
+        for v in self._videos:
+            url = v.get('url', '')
+            if url:
+                self._selected_urls.add(url)
+        self._refresh_grid()
+        n = len(self._selected_urls)
+        self._sel_lbl.configure(text=f'{n} {T("selected")}' if n else '')
+
     def _on_site_change(self, val):
         self._site_key = val
         self._categories.clear()
@@ -957,7 +1000,8 @@ class ModernApp(ctk.CTk):
         if self._site_key == 'JableTV':
             self._current_base_url = f'https://jable.tv/search/?q={q}'
         else:
-            self._current_base_url = f'https://missav.ai/dm265/cn/search?query={q}'
+            lang = T('missav_lang')
+            self._current_base_url = f'https://missav.ai/dm265/{lang}/search?query={q}'
         self._page = 1
         self._has_next = True
         self._selected_urls.clear()
@@ -1052,12 +1096,70 @@ class ModernApp(ctk.CTk):
         url = self._dl_url_var.get().strip()
         if not url:
             return
-        if not M3U8Sites.VaildateUrl(url):
-            print(f'不支援的網址: {url}')
+        # Direct video URL
+        if M3U8Sites.VaildateUrl(url):
+            dest = self._dest_var.get() or 'download'
+            self._dlmgr.add_item(url, state='等待中')
+            self._dlmgr.enqueue(url, dest)
             return
+        # Listing / actress / category URL — crawl all videos
+        if self._is_listing_url(url):
+            self._status_lbl.configure(text=T('crawling_url'))
+            threading.Thread(target=self._crawl_listing, args=(url,),
+                             daemon=True).start()
+            return
+        print(T('url_not_supported') + f': {url}')
+
+    def _is_listing_url(self, url: str) -> bool:
+        """Check if URL is a JableTV or MissAV listing/category/actress page."""
+        return (url.startswith('https://jable.tv/') or
+                bool(re.match(r'https://(?:www\.)?missav\.(?:ai|ws)/', url)))
+
+    def _crawl_listing(self, url: str):
+        """Crawl a listing URL across all pages; add every video to the queue."""
         dest = self._dest_var.get() or 'download'
-        self._dlmgr.add_item(url, state='等待中')
-        self._dlmgr.enqueue(url, dest)
+        seen: set[str] = set()
+        is_jable = url.startswith('https://jable.tv/')
+        max_pages = 50
+
+        for page in range(1, max_pages + 1):
+            try:
+                if is_jable:
+                    if page == 1:
+                        page_url = url
+                    elif '?' in url:
+                        page_url = f'{url}&from_videos={page}'
+                    else:
+                        page_url = f'{url.rstrip("/")}/?from={page}'
+                    videos = JableTVBrowser.fetch_page(page_url)
+                else:
+                    page_url = MissAVBrowser.page_url(url, page)
+                    videos = MissAVBrowser.fetch_page(page_url)
+            except Exception:
+                break
+
+            if not videos:
+                break
+
+            new_count = 0
+            for v in videos:
+                video_url = v.get('url', '')
+                if video_url and video_url not in seen and M3U8Sites.VaildateUrl(video_url):
+                    seen.add(video_url)
+                    new_count += 1
+                    name = v.get('title', '')
+                    self._dlmgr.add_item(video_url, name=name, state='等待中')
+                    self._dlmgr.enqueue(video_url, dest)
+
+            if new_count == 0:
+                break  # No new videos on this page, stop
+
+            self.after(0, lambda n=len(seen): self._status_lbl.configure(
+                text=T('crawling_url') + f' ({n})'))
+
+        n = len(seen)
+        self.after(0, lambda: self._status_lbl.configure(
+            text=T('crawl_added', n=n)))
 
     def _download_all(self):
         dest = self._dest_var.get() or 'download'
