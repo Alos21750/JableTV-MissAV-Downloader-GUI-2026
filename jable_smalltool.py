@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Jable SmallTool — auto-downloader for new 中文字幕 videos.
+"""Jable SmallTool — auto-downloader with site/category/date selection.
 
-Watches the jable.tv/tags/chinese-subtitle/ page daily and downloads any
-new video it hasn't seen before. Keeps running in the background; the user
-only needs to pick an output folder once, then minimize the window.
+Supports JableTV and MissAV. The user picks which sites, which categories
+(multi-select), and a baseline date. The worker scans selected categories
+daily and downloads any new video it hasn't seen before.
 
 Author: ALOS
 """
@@ -32,6 +32,7 @@ except Exception:
 
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
+from M3U8Sites.SiteMissAV import MissAVBrowser
 
 # Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
 try:
@@ -43,19 +44,47 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-TAG_SLUG = 'chinese-subtitle'
-# Chinese-subtitle lives under /categories/ on jable.tv, not /tags/
-# sort_by=post_date puts newest first so we can stop once we hit old videos.
-TAG_URL = f'https://jable.tv/categories/{TAG_SLUG}/'
-TAG_URL_SORTED = f'{TAG_URL}?sort_by=post_date'
-BASELINE_DATE = '2026-04-01'
-BASELINE_DT = datetime(2026, 4, 1, tzinfo=timezone.utc)
-# Polite delay between per-video detail-page fetches to avoid hammering the site
+DEFAULT_BASELINE_DATE = '2026-04-01'
+DEFAULT_BASELINE_DT = datetime(2026, 4, 1, tzinfo=timezone.utc)
 PER_VIDEO_FETCH_DELAY_SEC = 0.3
 CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
-MAX_SCAN_PAGES = 50                # safety cap to avoid infinite scanning
-DAILY_SCAN_PAGES = 3               # a bit of overlap in case of late uploads
+MAX_SCAN_PAGES = 50
+DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
+
+# ── Site / category registry ────────────────────────────────────────
+# Each site entry: (display_name, browser_class, categories_list)
+# categories_list: [(cat_name, cat_url), ...]
+
+JABLE_CATEGORIES = [
+    ('最近更新', 'https://jable.tv/latest-updates/'),
+    ('熱門影片', 'https://jable.tv/hot/'),
+    ('新片上架', 'https://jable.tv/new-release/'),
+    ('中文字幕', 'https://jable.tv/categories/chinese-subtitle/'),
+]
+
+MISSAV_CATEGORIES = [
+    ('今日熱門', 'https://missav.ai/dm291/cn/today-hot'),
+    ('本週熱門', 'https://missav.ai/dm169/cn/weekly-hot'),
+    ('本月熱門', 'https://missav.ai/dm263/cn/monthly-hot'),
+    ('中文字幕', 'https://missav.ai/dm265/cn/chinese-subtitle'),
+    ('最近更新', 'https://missav.ai/dm515/cn/new'),
+    ('新作上市', 'https://missav.ai/dm590/cn/release'),
+    ('無碼流出', 'https://missav.ai/dm628/cn/uncensored-leak'),
+    ('FC2', 'https://missav.ai/dm150/cn/fc2'),
+    ('麻豆傳媒', 'https://missav.ai/dm35/cn/madou'),
+]
+
+SITES = {
+    'JableTV': {
+        'browser': JableTVBrowser,
+        'categories': JABLE_CATEGORIES,
+    },
+    'MissAV': {
+        'browser': MissAVBrowser,
+        'categories': MISSAV_CATEGORIES,
+    },
+}
 
 # State files live next to the exe for portability
 if getattr(sys, 'frozen', False):
@@ -80,6 +109,8 @@ TEXT_PRI = '#f0f0f8'
 TEXT_SEC = '#a0a0c0'
 TEXT_DIM = '#666688'
 BORDER = '#2a2a48'
+CHECK_ON = '#e94560'
+CHECK_OFF = '#2a2a48'
 
 
 # ── Persistence ──────────────────────────────────────────────────────
@@ -97,8 +128,9 @@ def load_config() -> dict:
             pass
     return {
         'output_folder': '',
-        'baseline_date': BASELINE_DATE,
+        'baseline_date': DEFAULT_BASELINE_DATE,
         'first_run_done': False,
+        'selected_targets': [],  # list of {"site": "JableTV", "category": "中文字幕"}
     }
 
 
@@ -127,12 +159,7 @@ def save_seen(seen: dict) -> None:
 
 # ── Downloader core ──────────────────────────────────────────────────
 class SmallToolWorker:
-    """Background worker that scans the tag page daily and downloads new videos.
-
-    One-at-a-time download semantics keep it gentle on bandwidth and simple
-    to reason about (no progress UI per-file needed). If the user configures
-    a larger concurrency we still cap at MAX_CONCURRENT.
-    """
+    """Background worker that scans selected site/category combos and downloads new videos."""
 
     def __init__(self, log_fn):
         self._log = log_fn
@@ -163,16 +190,14 @@ class SmallToolWorker:
                 self._scan_and_download(cfg)
             except Exception as e:
                 self._log(f'[ERROR] scan failed: {e}')
-            cfg = load_config()   # re-read in case user changed folder
-            # Sleep in 5s slices so stop() reacts quickly
+            cfg = load_config()
             waited = 0
             while waited < CHECK_INTERVAL_SEC and not self._stop.is_set():
                 time.sleep(5)
                 waited += 5
         self._log('Worker stopped.')
 
-    # Chinese numerals → int. Covers the range jable.tv actually emits
-    # (relative-time counts are small; '十一' = 11 is enough).
+    # Chinese numerals → int
     _CN_NUMS = {
         '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5,
         '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
@@ -180,11 +205,9 @@ class SmallToolWorker:
 
     @classmethod
     def _parse_cn_number(cls, s: str) -> Optional[int]:
-        """Parse a small Chinese number literal like '一', '十', '十二', '二十'."""
         if not s:
             return None
         if '十' in s:
-            # 十 = 10; 十X = 1X; X十 = X0; X十Y = XY
             parts = s.split('十')
             left = parts[0]
             right = parts[1] if len(parts) > 1 else ''
@@ -197,12 +220,6 @@ class SmallToolWorker:
 
     @classmethod
     def _parse_relative_date(cls, rel_text: str, now: Optional[datetime] = None) -> Optional[datetime]:
-        """Parse jable.tv's relative time strings.
-
-        Handles Arabic ('5 小時前', '3 個月前') AND Chinese-numeral
-        ('一星期前', '兩個月前') variants, and both 星期/週/周 for week.
-        Returns an absolute UTC datetime, or None if unparseable.
-        """
         if not rel_text:
             return None
         if now is None:
@@ -232,16 +249,15 @@ class SmallToolWorker:
         elif unit in ('星期', '週', '周'):
             delta = timedelta(weeks=n)
         elif unit in ('月', '個月'):
-            delta = timedelta(days=n * 30)  # approximate
+            delta = timedelta(days=n * 30)
         elif unit in ('年', '個年'):
-            delta = timedelta(days=n * 365)  # approximate
+            delta = timedelta(days=n * 365)
         else:
             return None
         return now - delta
 
     def _fetch_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
-        """Fetch a video detail page and extract its post datetime.
-        Returns (datetime or None, raw_relative_text)."""
+        """Fetch a video detail page and extract its post datetime (JableTV only)."""
         if cloudscraper is None or BeautifulSoup is None:
             return (None, '')
         try:
@@ -261,64 +277,28 @@ class SmallToolWorker:
         except Exception as e:
             return (None, f'ERR:{type(e).__name__}')
 
-    def _verbose_fetch_page(self, url: str) -> list:
-        """Like JableTVBrowser.fetch_page but logs exactly why it returns empty.
-        Helps diagnose Cloudflare challenges, site structure changes, etc."""
-        if cloudscraper is None or BeautifulSoup is None:
-            # Fall back to JableTVBrowser without diagnostics
-            try:
-                return JableTVBrowser.fetch_page(url)
-            except Exception as e:
-                self._log(f'  [ERR] fetch failed: {e}')
-                return []
+    def _fetch_page_for_site(self, site_name: str, url: str) -> list:
+        """Fetch a listing page using the appropriate browser for the site."""
+        browser = SITES[site_name]['browser']
         try:
-            scraper = JableTVBrowser._get_scraper()
-            r = scraper.get(url, timeout=30)
+            return browser.fetch_page(url)
         except Exception as e:
-            self._log(f'  [ERR] HTTP request failed: {type(e).__name__}: {e}')
+            self._log(f'  [ERR] fetch failed: {e}')
             return []
 
-        self._log(f'  HTTP {r.status_code}, body={len(r.content)} bytes')
-        if r.status_code != 200:
-            snippet = (r.text or '')[:200].replace('\n', ' ')
-            self._log(f'  Body snippet: {snippet}')
-            return []
-
-        try:
-            soup = BeautifulSoup(r.content, 'html.parser')
-        except Exception as e:
-            self._log(f'  [ERR] HTML parse failed: {e}')
-            return []
-
-        divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
-        if divlist is None:
-            # Check for Cloudflare challenge indicators
-            title = soup.title.string if soup.title else ''
-            has_cf = ('cloudflare' in r.text.lower() or
-                      'just a moment' in r.text.lower() or
-                      'challenge' in r.text.lower())
-            self._log(
-                f'  [WARN] list_videos div not found. '
-                f'title="{title}" cloudflare_indicators={has_cf}'
-            )
-            return []
-
-        cards = divlist.select('div.video-img-box')
-        videos = []
-        for card in cards:
-            detail = card.select_one('div.detail')
-            if not detail or not detail.h6 or not detail.h6.a:
-                continue
-            tag_a = detail.h6.a
-            img = card.select_one('img')
-            duration_span = card.select_one('span.label')
-            videos.append({
-                'url': tag_a.get('href', ''),
-                'title': str(tag_a.string or ''),
-                'thumbnail': img.get('data-src', '') if img else '',
-                'duration': duration_span.string if duration_span else '',
-            })
-        return videos
+    def _build_page_url(self, site_name: str, base_url: str, page: int) -> str:
+        """Build paginated URL for the given site."""
+        if page <= 1:
+            return base_url
+        if site_name == 'JableTV':
+            # JableTV uses ?sort_by=post_date&from=N
+            if '?' in base_url:
+                return f'{base_url}&from={page}'
+            return f'{base_url}?from={page}'
+        else:
+            # MissAV uses ?page=N
+            sep = '&' if '?' in base_url else '?'
+            return f'{base_url}{sep}page={page}'
 
     def _scan_and_download(self, cfg: dict):
         dest = cfg.get('output_folder') or ''
@@ -327,91 +307,111 @@ class SmallToolWorker:
             return
         os.makedirs(dest, exist_ok=True)
 
+        targets = cfg.get('selected_targets', [])
+        if not targets:
+            self._log('[WAIT] No sites/categories selected.')
+            return
+
+        baseline_str = cfg.get('baseline_date', DEFAULT_BASELINE_DATE)
+        try:
+            baseline_dt = datetime.strptime(baseline_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        except ValueError:
+            baseline_dt = DEFAULT_BASELINE_DT
+
         first_run = not cfg.get('first_run_done', False)
+        is_jable_site = any(t['site'] == 'JableTV' for t in targets)
 
-        if first_run:
-            self._log(
-                f'First run — scanning ALL 中文字幕 pages since {BASELINE_DATE}...'
-            )
-        else:
-            self._log(
-                f'Daily check — scanning up to {DAILY_SCAN_PAGES} page(s) of 中文字幕...'
-            )
+        self._log(f'{"First run" if first_run else "Daily check"} — '
+                  f'{len(targets)} target(s), baseline {baseline_str}')
 
-        new_videos = []
-        max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
-        reached_baseline = False  # hit a video older than BASELINE_DT — stop scanning
+        all_new_videos = []
 
-        for page in range(1, max_pages + 1):
+        for target in targets:
             if self._stop.is_set():
                 return
-            if reached_baseline:
-                break
-            # Sort by post_date (newest first) so date-based stopping works.
-            if page == 1:
-                url = TAG_URL_SORTED
-            else:
-                url = f'{TAG_URL_SORTED}&from={page}'
-            self._log(f'Fetching page {page}: {url}')
-            try:
-                videos = self._verbose_fetch_page(url)
-            except Exception as e:
-                self._log(f'[WARN] page {page} fetch failed: {e}')
-                continue
-            if not videos:
-                self._log(f'Page {page}: no videos returned — reached end.')
-                break
+            site_name = target['site']
+            cat_name = target['category']
 
-            self._log(f'Page {page}: got {len(videos)} video(s). Checking dates...')
-            page_all_seen = True
-            for v in videos:
+            # Find the URL for this category
+            cat_url = None
+            for name, url in SITES[site_name]['categories']:
+                if name == cat_name:
+                    cat_url = url
+                    break
+            if not cat_url:
+                self._log(f'[WARN] category not found: {site_name}/{cat_name}')
+                continue
+
+            self._log(f'── {site_name} / {cat_name} ──')
+
+            # Add sort param for JableTV
+            base_url = cat_url
+            if site_name == 'JableTV' and '?' not in base_url:
+                base_url = f'{cat_url}?sort_by=post_date'
+
+            max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
+            reached_baseline = False
+
+            for page in range(1, max_pages + 1):
                 if self._stop.is_set():
                     return
-                vurl = v.get('url', '')
-                if not vurl:
-                    continue
-                with self._seen_lock:
-                    if vurl in self._seen:
-                        continue
-                page_all_seen = False
-
-                # Check the release date before queuing
-                video_dt, rel_text = self._fetch_video_date(vurl)
-                time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
-                if video_dt is None:
-                    # Couldn't parse — skip conservatively (don't download
-                    # something we can't date-verify, don't mark as seen so
-                    # we retry next cycle).
-                    self._log(f'  [SKIP] could not parse date ({rel_text!r}): {vurl}')
-                    continue
-                if video_dt < BASELINE_DT:
-                    # Since list is sorted by post_date desc, everything after
-                    # this is also older. Stop scanning entirely.
-                    self._log(
-                        f'  [STOP] {vurl.rstrip("/").split("/")[-1]} is from '
-                        f'{rel_text} (before {BASELINE_DATE}). Stopping scan.'
-                    )
-                    # Mark as seen so we don't re-fetch its date next cycle
-                    self._mark_seen(vurl, v.get('title', ''), skipped=True)
-                    reached_baseline = True
+                if reached_baseline:
                     break
 
-                self._log(f'  [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
-                new_videos.append(v)
+                page_url = self._build_page_url(site_name, base_url, page)
+                self._log(f'  Page {page}: {page_url}')
+                videos = self._fetch_page_for_site(site_name, page_url)
+                if not videos:
+                    self._log(f'  Page {page}: no videos — end.')
+                    break
 
-            # Daily mode: also stop if all videos on this page are already seen
-            if not first_run and page_all_seen and not reached_baseline:
-                self._log('All videos on this page already seen — stopping.')
-                break
+                self._log(f'  Page {page}: {len(videos)} video(s)')
+                page_all_seen = True
 
-        if not new_videos:
-            self._log(f'No new videos after {BASELINE_DATE}.')
+                for v in videos:
+                    if self._stop.is_set():
+                        return
+                    vurl = v.get('url', '')
+                    if not vurl:
+                        continue
+                    with self._seen_lock:
+                        if vurl in self._seen:
+                            continue
+                    page_all_seen = False
+
+                    # Date check for JableTV (has detail pages with relative dates)
+                    if site_name == 'JableTV':
+                        video_dt, rel_text = self._fetch_video_date(vurl)
+                        time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
+                        if video_dt is None:
+                            self._log(f'    [SKIP] no date ({rel_text!r}): {vurl}')
+                            continue
+                        if video_dt < baseline_dt:
+                            slug = vurl.rstrip('/').split('/')[-1]
+                            self._log(f'    [STOP] {slug} — {rel_text} (before {baseline_str})')
+                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            reached_baseline = True
+                            break
+                        self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
+                    else:
+                        # MissAV: no easy date check, just download unseen
+                        self._log(f'    [KEEP] {v.get("title", vurl)[:60]}')
+
+                    v['_site'] = site_name
+                    all_new_videos.append(v)
+
+                if not first_run and page_all_seen and not reached_baseline:
+                    self._log('  All seen on this page — stopping.')
+                    break
+
+        if not all_new_videos:
+            self._log(f'No new videos found.')
             cfg['first_run_done'] = True
             save_config(cfg)
             return
 
-        self._log(f'Found {len(new_videos)} new video(s). Starting downloads...')
-        for v in new_videos:
+        self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
+        for v in all_new_videos:
             if self._stop.is_set():
                 return
             self._download_one(v, dest)
@@ -423,22 +423,22 @@ class SmallToolWorker:
     def _download_one(self, video: dict, dest: str):
         vurl = video['url']
         title = video.get('title', '') or vurl.rstrip('/').split('/')[-1]
-        self._log(f'↓ {title}')
+        site = video.get('_site', '?')
+        self._log(f'↓ [{site}] {title}')
         try:
-            site = M3U8Sites.CreateSite(vurl, dest)
-            if not site or not site.is_url_vaildate():
+            site_obj = M3U8Sites.CreateSite(vurl, dest)
+            if not site_obj or not site_obj.is_url_vaildate():
                 self._log(f'  [SKIP] invalid URL: {vurl}')
                 self._mark_seen(vurl, title, skipped=True)
                 return
-            site.start_download()
-            if getattr(site, '_cancel_job', False):
+            site_obj.start_download()
+            if getattr(site_obj, '_cancel_job', False):
                 self._log('  [CANCELLED]')
                 return
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title)
         except Exception as e:
             self._log(f'  [ERR] {e}')
-            # Don't mark seen; will retry next cycle
 
     def _mark_seen(self, url: str, title: str, skipped: bool = False):
         with self._seen_lock:
@@ -454,59 +454,135 @@ class SmallToolWorker:
 class SmallToolApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f'{APP_NAME} — Jable 中文字幕 每日下載 — by ALOS')
-        self.geometry('720x480')
-        self.minsize(600, 400)
+        self.title(f'{APP_NAME} — 多站自動下載工具 — by ALOS')
+        self.geometry('860x680')
+        self.minsize(700, 550)
         self.configure(bg=BG_DARK)
 
         self._cfg = load_config()
         self._log_queue: list[str] = []
         self._log_lock = threading.Lock()
         self._worker = SmallToolWorker(log_fn=self._enqueue_log)
+        self._check_vars: dict[str, tk.BooleanVar] = {}  # "site|cat" -> BooleanVar
 
         self._build_ui()
+        self._load_selections_from_config()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
 
-        # Auto-start if an output folder is already configured
-        if self._cfg.get('output_folder'):
+        # Auto-start if configured
+        if self._cfg.get('output_folder') and self._cfg.get('selected_targets'):
             self._start_worker()
 
-        # Drain log queue onto the Tk main loop
         self.after(300, self._flush_log_queue)
 
     def _build_ui(self):
-        # Header
-        hdr = tk.Frame(self, bg=BG_HEADER, height=46)
+        # ── Header ──────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=BG_HEADER, height=48)
         hdr.pack(fill='x')
         hdr.pack_propagate(False)
-        tk.Label(hdr, text='Jable 小工具 — 中文字幕 每日自動下載',
+        tk.Label(hdr, text='Jable 小工具',
                  bg=BG_HEADER, fg=ACCENT,
-                 font=('Microsoft YaHei', 13, 'bold')).pack(
-            side='left', padx=14)
+                 font=('Microsoft JhengHei', 14, 'bold')).pack(side='left', padx=14)
+        tk.Label(hdr, text='多站自動下載',
+                 bg=BG_HEADER, fg=TEXT_SEC,
+                 font=('Microsoft JhengHei', 11)).pack(side='left', padx=(0, 8))
         tk.Label(hdr, text='by ALOS',
                  bg=BG_HEADER, fg=TEXT_DIM,
-                 font=('Microsoft YaHei', 10)).pack(side='right', padx=14)
+                 font=('Microsoft JhengHei', 10)).pack(side='right', padx=14)
 
-        # Config area
+        # ── Config row: folder + date ───────────────────────────────
         cfg_frame = tk.Frame(self, bg=BG_DARK)
-        cfg_frame.pack(fill='x', padx=14, pady=(10, 6))
+        cfg_frame.pack(fill='x', padx=14, pady=(10, 4))
 
         tk.Label(cfg_frame, text='儲存位置:', bg=BG_DARK, fg=TEXT_SEC,
-                 font=('Microsoft YaHei', 10)).pack(side='left')
+                 font=('Microsoft JhengHei', 10)).pack(side='left')
         self._folder_var = tk.StringVar(value=self._cfg.get('output_folder', ''))
         entry = tk.Entry(cfg_frame, textvariable=self._folder_var,
                          bg=BG_INPUT, fg=TEXT_PRI,
                          insertbackground=TEXT_PRI,
                          relief='flat', bd=4,
-                         font=('Microsoft YaHei', 10))
+                         font=('Microsoft JhengHei', 10))
         entry.pack(side='left', fill='x', expand=True, padx=8)
-        tk.Button(cfg_frame, text='選擇資料夾',
+        tk.Button(cfg_frame, text='瀏覽',
                   bg=BG_CARD, fg=TEXT_PRI,
                   activebackground='#2a2a4a',
                   relief='flat', bd=0, padx=10, pady=4,
                   command=self._pick_folder).pack(side='left')
 
-        # Control row
+        # Date row
+        date_frame = tk.Frame(self, bg=BG_DARK)
+        date_frame.pack(fill='x', padx=14, pady=(0, 6))
+        tk.Label(date_frame, text='基準日期:', bg=BG_DARK, fg=TEXT_SEC,
+                 font=('Microsoft JhengHei', 10)).pack(side='left')
+        self._date_var = tk.StringVar(value=self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE))
+        date_entry = tk.Entry(date_frame, textvariable=self._date_var,
+                              bg=BG_INPUT, fg=TEXT_PRI,
+                              insertbackground=TEXT_PRI,
+                              relief='flat', bd=4, width=14,
+                              font=('Microsoft JhengHei', 10))
+        date_entry.pack(side='left', padx=8)
+        tk.Label(date_frame, text='(YYYY-MM-DD，只下載此日期之後的影片)',
+                 bg=BG_DARK, fg=TEXT_DIM,
+                 font=('Microsoft JhengHei', 9)).pack(side='left')
+
+        # ── Site / Category selection ───────────────────────────────
+        sel_label = tk.Label(self, text='選擇網站與分類（可多選）:',
+                             bg=BG_DARK, fg=TEXT_SEC,
+                             font=('Microsoft JhengHei', 10, 'bold'), anchor='w')
+        sel_label.pack(fill='x', padx=14, pady=(4, 2))
+
+        sel_container = tk.Frame(self, bg=BG_DARK)
+        sel_container.pack(fill='x', padx=14, pady=(0, 6))
+
+        for site_name, site_info in SITES.items():
+            site_frame = tk.LabelFrame(
+                sel_container, text=f'  {site_name}  ',
+                bg=BG_CARD, fg=ACCENT,
+                font=('Microsoft JhengHei', 10, 'bold'),
+                bd=1, relief='groove',
+                highlightbackground=BORDER, highlightthickness=1,
+                padx=8, pady=6)
+            site_frame.pack(side='left', fill='both', expand=True, padx=(0, 8))
+
+            # "Select all" for this site
+            all_var = tk.BooleanVar(value=False)
+            all_key = f'{site_name}|__all__'
+            self._check_vars[all_key] = all_var
+
+            all_cb = tk.Checkbutton(
+                site_frame, text='全選',
+                bg=BG_CARD, fg=WARNING,
+                selectcolor=BG_INPUT,
+                activebackground=BG_CARD, activeforeground=WARNING,
+                font=('Microsoft JhengHei', 9, 'bold'),
+                variable=all_var,
+                command=lambda sn=site_name: self._toggle_select_all(sn))
+            all_cb.pack(anchor='w')
+
+            # Separator
+            tk.Frame(site_frame, bg=BORDER, height=1).pack(fill='x', pady=3)
+
+            # Category checkboxes in columns
+            cats = site_info['categories']
+            cat_grid = tk.Frame(site_frame, bg=BG_CARD)
+            cat_grid.pack(fill='x')
+
+            cols = 3 if len(cats) > 6 else 2
+            for i, (cat_name, _) in enumerate(cats):
+                key = f'{site_name}|{cat_name}'
+                var = tk.BooleanVar(value=False)
+                self._check_vars[key] = var
+                cb = tk.Checkbutton(
+                    cat_grid, text=cat_name,
+                    bg=BG_CARD, fg=TEXT_PRI,
+                    selectcolor=BG_INPUT,
+                    activebackground=BG_CARD, activeforeground=TEXT_PRI,
+                    font=('Microsoft JhengHei', 9),
+                    variable=var)
+                row, col = divmod(i, cols)
+                cb.grid(row=row, column=col, sticky='w', padx=4)
+
+        # ── Control row ─────────────────────────────────────────────
         ctrl = tk.Frame(self, bg=BG_DARK)
         ctrl.pack(fill='x', padx=14, pady=(0, 6))
 
@@ -515,7 +591,7 @@ class SmallToolApp(tk.Tk):
             bg=ACCENT, fg='#ffffff',
             activebackground=ACCENT_HOVER,
             relief='flat', bd=0, padx=14, pady=6,
-            font=('Microsoft YaHei', 10, 'bold'),
+            font=('Microsoft JhengHei', 10, 'bold'),
             command=self._start_worker)
         self._start_btn.pack(side='left')
 
@@ -524,7 +600,7 @@ class SmallToolApp(tk.Tk):
             bg='#3a1a20', fg=ERROR_C,
             activebackground='#2a1215',
             relief='flat', bd=0, padx=14, pady=6,
-            font=('Microsoft YaHei', 10),
+            font=('Microsoft JhengHei', 10),
             command=self._stop_worker,
             state='disabled')
         self._stop_btn.pack(side='left', padx=(8, 0))
@@ -534,26 +610,16 @@ class SmallToolApp(tk.Tk):
             bg=BG_CARD, fg=TEXT_PRI,
             activebackground='#2a2a4a',
             relief='flat', bd=0, padx=14, pady=6,
-            font=('Microsoft YaHei', 10),
+            font=('Microsoft JhengHei', 10),
             command=self._check_now)
         self._check_now_btn.pack(side='left', padx=(8, 0))
 
         self._status_lbl = tk.Label(
             ctrl, text='閒置', bg=BG_DARK, fg=TEXT_DIM,
-            font=('Microsoft YaHei', 10))
+            font=('Microsoft JhengHei', 10))
         self._status_lbl.pack(side='right')
 
-        # Info line
-        info = tk.Label(
-            self,
-            text=(f'監看分類: 中文字幕 ({TAG_URL})   |   '
-                  f'每 24 小時自動檢查一次   |   '
-                  f'基準日期: {BASELINE_DATE}'),
-            bg=BG_DARK, fg=TEXT_DIM, font=('Microsoft YaHei', 9),
-            anchor='w')
-        info.pack(fill='x', padx=14, pady=(0, 8))
-
-        # Log box
+        # ── Log box ─────────────────────────────────────────────────
         self._log_box = scrolledtext.ScrolledText(
             self, bg=BG_CARD, fg=TEXT_PRI,
             insertbackground=TEXT_PRI,
@@ -563,11 +629,39 @@ class SmallToolApp(tk.Tk):
         self._log_box.pack(fill='both', expand=True, padx=14, pady=(0, 10))
 
         # Footer
-        footer = tk.Label(
+        tk.Label(
             self,
-            text='提示：關閉視窗會結束程式。最小化後程式仍在背景運行。',
-            bg=BG_DARK, fg=TEXT_DIM, font=('Microsoft YaHei', 9))
-        footer.pack(pady=(0, 8))
+            text='提示：關閉視窗會結束程式。最小化後程式仍在背景運行。每 24 小時自動檢查一次。',
+            bg=BG_DARK, fg=TEXT_DIM, font=('Microsoft JhengHei', 9)).pack(pady=(0, 8))
+
+    # ── Selection helpers ────────────────────────────────────────────
+    def _toggle_select_all(self, site_name: str):
+        all_key = f'{site_name}|__all__'
+        val = self._check_vars[all_key].get()
+        for cat_name, _ in SITES[site_name]['categories']:
+            key = f'{site_name}|{cat_name}'
+            self._check_vars[key].set(val)
+
+    def _get_selected_targets(self) -> list[dict]:
+        targets = []
+        for site_name, site_info in SITES.items():
+            for cat_name, _ in site_info['categories']:
+                key = f'{site_name}|{cat_name}'
+                if self._check_vars.get(key, tk.BooleanVar()).get():
+                    targets.append({'site': site_name, 'category': cat_name})
+        return targets
+
+    def _save_selections_to_config(self):
+        self._cfg['selected_targets'] = self._get_selected_targets()
+        self._cfg['baseline_date'] = self._date_var.get().strip()
+        save_config(self._cfg)
+
+    def _load_selections_from_config(self):
+        targets = self._cfg.get('selected_targets', [])
+        for t in targets:
+            key = f'{t["site"]}|{t["category"]}'
+            if key in self._check_vars:
+                self._check_vars[key].set(True)
 
     # ── Handlers ─────────────────────────────────────────────────────
     def _pick_folder(self):
@@ -583,9 +677,27 @@ class SmallToolApp(tk.Tk):
         if not folder:
             messagebox.showwarning('缺少資料夾', '請先選擇影片儲存資料夾。')
             return
-        # Persist chosen folder so next launch starts automatically
+        targets = self._get_selected_targets()
+        if not targets:
+            messagebox.showwarning('未選擇分類', '請至少勾選一個網站分類。')
+            return
+
+        # Validate date
+        date_str = self._date_var.get().strip()
+        try:
+            datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            messagebox.showwarning('日期格式錯誤', '基準日期格式應為 YYYY-MM-DD。')
+            return
+
         self._cfg['output_folder'] = folder
-        save_config(self._cfg)
+        self._cfg['baseline_date'] = date_str
+        self._save_selections_to_config()
+
+        sites_summary = ', '.join(set(t['site'] for t in targets))
+        cats_summary = ', '.join(t['category'] for t in targets)
+        self._log(f'目標: {sites_summary} — {cats_summary}')
+        self._log(f'基準日期: {date_str}')
 
         self._worker.start()
         self._start_btn.configure(state='disabled')
@@ -600,14 +712,15 @@ class SmallToolApp(tk.Tk):
         self._status_lbl.configure(text='已停止', fg=TEXT_DIM)
 
     def _check_now(self):
-        """Trigger an immediate scan by bumping the worker — if not running,
-        kick off a one-shot scan in a thread."""
         folder = self._folder_var.get().strip()
         if not folder:
             messagebox.showwarning('缺少資料夾', '請先選擇影片儲存資料夾。')
             return
-        self._cfg['output_folder'] = folder
-        save_config(self._cfg)
+        targets = self._get_selected_targets()
+        if not targets:
+            messagebox.showwarning('未選擇分類', '請至少勾選一個網站分類。')
+            return
+        self._save_selections_to_config()
 
         def _once():
             cfg = load_config()
@@ -642,6 +755,7 @@ class SmallToolApp(tk.Tk):
         self.after(300, self._flush_log_queue)
 
     def _on_close(self):
+        self._save_selections_to_config()
         self._worker.stop()
         try:
             save_config(self._cfg)
