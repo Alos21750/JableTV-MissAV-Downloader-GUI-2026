@@ -21,23 +21,38 @@ import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
 from config import headers
+from locales import T, set_lang, get_lang
 
 # ── Design tokens ────────────────────────────────────────────────────
-ACCENT = '#e94560'
-ACCENT_HOVER = '#c73350'
-ACCENT2 = '#7b61ff'
-SUCCESS = '#4ade80'
-WARNING = '#fbbf24'
-ERROR_C = '#f87171'
-BG_DARK = '#0d0d18'
-BG_CARD = '#161630'
-BG_INPUT = '#1c1c38'
-BG_HEADER = '#101020'
-BG_SECTION = '#131328'
-TEXT_PRI = '#f0f0f8'
-TEXT_SEC = '#a0a0c0'
-TEXT_DIM = '#666688'
-BORDER = '#2a2a48'
+ACCENT       = '#e94560'
+ACCENT_HOVER = '#d13a52'
+ACCENT_DIM   = '#3a1524'
+ACCENT2      = '#7b61ff'
+ACCENT2_HOVER = '#6a50e0'
+SUCCESS      = '#34d399'
+SUCCESS_DIM  = '#0d3325'
+WARNING      = '#fbbf24'
+WARNING_DIM  = '#3a2e0d'
+ERROR_C      = '#f87171'
+ERROR_DIM    = '#3a1a1a'
+
+BG_DARK      = '#0b0b19'
+BG_CARD      = '#13132c'
+BG_CARD_HOVER = '#1a1a38'
+BG_INPUT     = '#181836'
+BG_HEADER    = '#0e0e20'
+BG_SECTION   = '#111126'
+BG_SIDEBAR   = '#090916'
+BG_BADGE     = '#1e1e3e'
+
+TEXT_PRI     = '#eaeaf4'
+TEXT_SEC     = '#9494b4'
+TEXT_DIM     = '#585878'
+TEXT_LINK    = '#8888cc'
+
+BORDER       = '#242444'
+BORDER_HOVER = '#343460'
+BORDER_CARD  = '#1e1e3c'
 
 DEFAULT_CONCURRENT = 2
 MAX_CONCURRENT = 10
@@ -294,9 +309,10 @@ def _fetch_thumbnail(url: str) -> Optional[Image.Image]:
 
 # ── Main App ─────────────────────────────────────────────────────────
 class ModernApp(ctk.CTk):
-    def __init__(self, url: str = '', dest: str = 'download'):
+    def __init__(self, url: str = '', dest: str = 'download', lang: str = 'zh'):
         super().__init__()
 
+        set_lang(lang)
         ctk.set_appearance_mode('dark')
         ctk.set_default_color_theme('dark-blue')
 
@@ -341,103 +357,140 @@ class ModernApp(ctk.CTk):
 
     # ── Build UI ─────────────────────────────────────────────────────
     def _build_ui(self):
-        # Header
-        header = ctk.CTkFrame(self, height=48, fg_color=BG_HEADER, corner_radius=0)
+        # ── Header bar ──────────────────────────────────────────────
+        header = ctk.CTkFrame(self, height=56, fg_color=BG_HEADER, corner_radius=0)
         header.pack(fill='x')
         header.pack_propagate(False)
-        ctk.CTkLabel(header, text='JableTV & MissAV Downloader',
-                     font=('Microsoft YaHei', 16, 'bold'),
-                     text_color=ACCENT).pack(side='left', padx=16)
-        ctk.CTkLabel(header, text='by ALOS  •  v2.0 Material',
-                     font=('Microsoft YaHei', 11),
-                     text_color=TEXT_DIM).pack(side='right', padx=16)
 
-        # Tabview
+        # Brand
+        brand = ctk.CTkFrame(header, fg_color='transparent')
+        brand.pack(side='left', padx=20, fill='y')
+        ctk.CTkLabel(brand, text='JableTV & MissAV',
+                     font=('Microsoft JhengHei', 17, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left', pady=0)
+        ctk.CTkLabel(brand, text='Downloader',
+                     font=('Microsoft JhengHei', 17),
+                     text_color=ACCENT).pack(side='left', padx=(8, 0))
+
+        # Right info
+        ctk.CTkLabel(header, text='v2.1 Professional  |  by ALOS',
+                     font=('Consolas', 10),
+                     text_color=TEXT_DIM).pack(side='right', padx=20)
+
+        # Header separator
+        ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        # ── Tab view ────────────────────────────────────────────────
         self._tabs = ctk.CTkTabview(self, fg_color=BG_DARK,
                                      segmented_button_fg_color=BG_HEADER,
                                      segmented_button_selected_color=ACCENT,
                                      segmented_button_unselected_color=BG_CARD,
+                                     segmented_button_selected_hover_color=ACCENT_HOVER,
+                                     segmented_button_unselected_hover_color=BG_CARD_HOVER,
                                      corner_radius=0)
         self._tabs.pack(fill='both', expand=True, padx=0, pady=0)
-        self._tabs.add('瀏覽')
-        self._tabs.add('下載')
-        self._tabs.add('設定')
+        self._tabs.add(T('tab_browse'))
+        self._tabs.add(T('tab_download'))
+        self._tabs.add(T('tab_settings'))
 
         self._build_browse_tab()
         self._build_download_tab()
         self._build_settings_tab()
 
-        # Status bar
-        status_bar = ctk.CTkFrame(self, height=28, fg_color=BG_HEADER, corner_radius=0)
+        # ── Status bar ──────────────────────────────────────────────
+        ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+        status_bar = ctk.CTkFrame(self, height=30, fg_color=BG_HEADER, corner_radius=0)
         status_bar.pack(fill='x')
         status_bar.pack_propagate(False)
-        self._status_lbl = ctk.CTkLabel(status_bar, text='就緒',
-                                         font=('Consolas', 11),
+        self._status_lbl = ctk.CTkLabel(status_bar, text='Ready',
+                                         font=('Consolas', 10),
                                          text_color=TEXT_SEC)
-        self._status_lbl.pack(side='left', padx=12)
+        self._status_lbl.pack(side='left', padx=16)
 
     # ── Browse Tab ───────────────────────────────────────────────────
     def _build_browse_tab(self):
-        tab = self._tabs.tab('瀏覽')
+        tab = self._tabs.tab(T('tab_browse'))
 
-        # Top bar
-        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=50)
+        # ── Top toolbar ─────────────────────────────────────────────
+        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=54)
         top.pack(fill='x')
         top.pack_propagate(False)
 
-        # Site selector
+        # Left group: Site + Category selectors
+        left = ctk.CTkFrame(top, fg_color='transparent')
+        left.pack(side='left', fill='y', padx=(16, 0))
+
         self._site_var = ctk.StringVar(value='JableTV')
-        ctk.CTkLabel(top, text='站點:', text_color=TEXT_SEC,
-                     font=('Microsoft YaHei', 11)).pack(side='left', padx=(12, 4))
+        ctk.CTkLabel(left, text='Site', text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(side='left', padx=(0, 6))
         self._site_menu = ctk.CTkOptionMenu(
-            top, values=list(SITES.keys()), variable=self._site_var,
-            command=self._on_site_change, width=100,
+            left, values=list(SITES.keys()), variable=self._site_var,
+            command=self._on_site_change, width=110,
             fg_color=BG_INPUT, button_color=ACCENT,
-            button_hover_color=ACCENT_HOVER)
-        self._site_menu.pack(side='left', padx=4)
+            button_hover_color=ACCENT_HOVER, corner_radius=6)
+        self._site_menu.pack(side='left', padx=(0, 8))
 
-        # Category selector
-        ctk.CTkLabel(top, text='分類:', text_color=TEXT_SEC,
-                     font=('Microsoft YaHei', 11)).pack(side='left', padx=(12, 4))
-        self._cat_var = ctk.StringVar(value='載入中...')
+        # Vertical divider
+        ctk.CTkFrame(left, width=1, fg_color=BORDER).pack(
+            side='left', fill='y', pady=14, padx=6)
+
+        ctk.CTkLabel(left, text=T('category_label'), text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(side='left', padx=(6, 6))
+        self._cat_var = ctk.StringVar(value=T('loading_browse'))
         self._cat_menu = ctk.CTkOptionMenu(
-            top, values=['載入中...'], variable=self._cat_var,
-            command=self._on_cat_change, width=160,
+            left, values=[T('loading_browse')], variable=self._cat_var,
+            command=self._on_cat_change, width=170,
             fg_color=BG_INPUT, button_color=ACCENT,
-            button_hover_color=ACCENT_HOVER)
-        self._cat_menu.pack(side='left', padx=4)
+            button_hover_color=ACCENT_HOVER, corner_radius=6)
+        self._cat_menu.pack(side='left')
 
-        # Search
+        # Center: Search
+        center = ctk.CTkFrame(top, fg_color='transparent')
+        center.pack(side='left', fill='y', padx=16)
+
         self._search_var = ctk.StringVar()
-        search_entry = ctk.CTkEntry(top, textvariable=self._search_var,
-                                     placeholder_text='搜尋影片...',
-                                     width=200, fg_color=BG_INPUT,
-                                     border_color=BORDER, text_color=TEXT_PRI)
-        search_entry.pack(side='left', padx=(12, 4))
+        search_entry = ctk.CTkEntry(center, textvariable=self._search_var,
+                                     placeholder_text=T('search_placeholder'),
+                                     width=220, height=32,
+                                     fg_color=BG_INPUT, border_color=BORDER,
+                                     border_width=1, corner_radius=6,
+                                     text_color=TEXT_PRI)
+        search_entry.pack(side='left', padx=(0, 6))
         search_entry.bind('<Return>', lambda e: self._on_search())
-        ctk.CTkButton(top, text='搜尋', command=self._on_search,
-                      width=60, fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER).pack(side='left', padx=4)
+        ctk.CTkButton(center, text=T('search_btn'), command=self._on_search,
+                      width=64, height=32, corner_radius=6,
+                      fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER).pack(side='left')
 
-        # Selection controls
-        self._sel_lbl = ctk.CTkLabel(top, text='', text_color=ACCENT,
-                                      font=('Microsoft YaHei', 11, 'bold'))
+        # Right: Selection controls
+        right = ctk.CTkFrame(top, fg_color='transparent')
+        right.pack(side='right', fill='y', padx=(0, 16))
+
+        self._sel_lbl = ctk.CTkLabel(right, text='', text_color=ACCENT,
+                                      font=('Microsoft JhengHei', 11, 'bold'))
         self._sel_lbl.pack(side='right', padx=8)
-        ctk.CTkButton(top, text='下載選中', command=self._download_selected,
-                      width=80, fg_color=ACCENT,
+        ctk.CTkButton(right, text=T('select_all_btn'), command=self._select_all_on_page,
+                      width=80, height=32, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER,
+                      text_color=TEXT_PRI).pack(side='right', padx=4)
+        ctk.CTkButton(right, text=T('download_selected'), command=self._download_selected,
+                      width=100, height=32, corner_radius=6,
+                      fg_color=ACCENT,
                       hover_color=ACCENT_HOVER).pack(side='right', padx=4)
-        ctk.CTkButton(top, text='加入清單', command=self._add_selected_to_queue,
-                      width=80, fg_color=BG_CARD,
-                      hover_color='#2a2a4a',
+        ctk.CTkButton(right, text=T('clear_list'), command=self._add_selected_to_queue,
+                      width=80, height=32, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER,
                       text_color=TEXT_PRI).pack(side='right', padx=4)
 
-        # Content area: sidebar + grid
+        # ── Content area: sidebar + grid ────────────────────────────
         content = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
         content.pack(fill='both', expand=True)
 
         # Sidebar
         self._sidebar = ctk.CTkScrollableFrame(
-            content, width=130, fg_color='#0a0a16',
+            content, width=145, fg_color=BG_SIDEBAR,
             corner_radius=0, scrollbar_button_color=BORDER)
         self._sidebar.pack(side='left', fill='y')
 
@@ -449,169 +502,277 @@ class ModernApp(ctk.CTk):
             grid_area, fg_color=BG_DARK, corner_radius=0)
         self._grid_scroll.pack(fill='both', expand=True)
 
-        # Navigation bar
-        nav = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=40)
+        # ── Navigation bar ──────────────────────────────────────────
+        nav = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=44)
         nav.pack(fill='x')
         nav.pack_propagate(False)
-        ctk.CTkButton(nav, text='« 首頁', width=60, fg_color=BG_CARD,
-                      hover_color='#2a2a4a', text_color=TEXT_PRI,
-                      command=lambda: self._goto_page(1)).pack(side='left', padx=4, pady=4)
-        ctk.CTkButton(nav, text='‹ 上一頁', width=70, fg_color=BG_CARD,
-                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+
+        nav_inner = ctk.CTkFrame(nav, fg_color='transparent')
+        nav_inner.pack(pady=6)
+
+        ctk.CTkButton(nav_inner, text=T('first_page'), width=64, height=30,
+                      corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=lambda: self._goto_page(1)).pack(side='left', padx=3)
+        ctk.CTkButton(nav_inner, text=T('prev_page'), width=74, height=30,
+                      corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=lambda: self._goto_page(self._page - 1)
-                      ).pack(side='left', padx=4, pady=4)
-        self._page_lbl = ctk.CTkLabel(nav, text='第 1 頁', text_color=TEXT_PRI,
-                                       font=('Microsoft YaHei', 12, 'bold'),
+                      ).pack(side='left', padx=3)
+        self._page_lbl = ctk.CTkLabel(nav_inner, text=T('page_n', n=1), text_color=TEXT_PRI,
+                                       font=('Microsoft JhengHei', 12, 'bold'),
                                        width=80)
-        self._page_lbl.pack(side='left', padx=8)
-        ctk.CTkButton(nav, text='下一頁 ›', width=70, fg_color=ACCENT,
+        self._page_lbl.pack(side='left', padx=10)
+        ctk.CTkButton(nav_inner, text=T('next_page'), width=74, height=30,
+                      corner_radius=6,
+                      fg_color=ACCENT,
                       hover_color=ACCENT_HOVER,
                       command=lambda: self._goto_page(self._page + 1)
-                      ).pack(side='left', padx=4, pady=4)
+                      ).pack(side='left', padx=3)
+
+        # Page jump input
+        ctk.CTkFrame(nav_inner, width=1, fg_color=BORDER).pack(
+            side='left', fill='y', pady=4, padx=10)
+        self._page_jump_var = ctk.StringVar(value='')
+        page_entry = ctk.CTkEntry(nav_inner, textvariable=self._page_jump_var,
+                                   width=50, height=30, corner_radius=6,
+                                   fg_color=BG_INPUT, border_color=BORDER,
+                                   border_width=1, text_color=TEXT_PRI,
+                                   placeholder_text='#',
+                                   justify='center')
+        page_entry.pack(side='left', padx=3)
+        page_entry.bind('<Return>', lambda e: self._jump_to_page())
+        ctk.CTkButton(nav_inner, text='Go', width=40, height=30,
+                      corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._jump_to_page).pack(side='left', padx=3)
 
         self._rebuild_sidebar()
 
     # ── Download Tab ─────────────────────────────────────────────────
     def _build_download_tab(self):
-        tab = self._tabs.tab('下載')
+        tab = self._tabs.tab(T('tab_download'))
 
-        # Input section
+        # ── Input section ───────────────────────────────────────────
         input_frame = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0)
-        input_frame.pack(fill='x', padx=0, pady=0)
+        input_frame.pack(fill='x')
 
+        # Save location
         row1 = ctk.CTkFrame(input_frame, fg_color='transparent')
-        row1.pack(fill='x', padx=12, pady=(8, 4))
-        ctk.CTkLabel(row1, text='存放位置', text_color=TEXT_SEC, width=70,
-                     font=('Microsoft YaHei', 11)).pack(side='left')
+        row1.pack(fill='x', padx=16, pady=(12, 4))
+        ctk.CTkLabel(row1, text=T('save_location'), text_color=TEXT_DIM, width=70,
+                     font=('Microsoft JhengHei', 10), anchor='e').pack(side='left')
         self._dest_var = ctk.StringVar(value=self._dest)
         ctk.CTkEntry(row1, textvariable=self._dest_var,
-                     fg_color=BG_INPUT, border_color=BORDER,
+                     height=34, corner_radius=6,
+                     fg_color=BG_INPUT, border_color=BORDER, border_width=1,
                      text_color=TEXT_PRI).pack(side='left', fill='x',
-                                               expand=True, padx=8)
-        ctk.CTkButton(row1, text='瀏覽', width=60, fg_color=BG_CARD,
-                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                                               expand=True, padx=10)
+        ctk.CTkButton(row1, text=T('browse_folder'), width=60, height=34, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._pick_dest).pack(side='left')
-        ctk.CTkButton(row1, text='開啟', width=50, fg_color=BG_CARD,
-                      hover_color='#2a2a4a', text_color=TEXT_PRI,
-                      command=self._open_dest_folder).pack(side='left', padx=(4, 0))
+        ctk.CTkButton(row1, text='Open', width=50, height=34, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._open_dest_folder).pack(side='left', padx=(6, 0))
 
+        # Download URL
         row2 = ctk.CTkFrame(input_frame, fg_color='transparent')
-        row2.pack(fill='x', padx=12, pady=(0, 8))
-        ctk.CTkLabel(row2, text='下載網址', text_color=TEXT_SEC, width=70,
-                     font=('Microsoft YaHei', 11)).pack(side='left')
+        row2.pack(fill='x', padx=16, pady=(0, 12))
+        ctk.CTkLabel(row2, text=T('url_label'), text_color=TEXT_DIM, width=70,
+                     font=('Microsoft JhengHei', 10), anchor='e').pack(side='left')
         self._dl_url_var = ctk.StringVar(value=self._url_input)
         ctk.CTkEntry(row2, textvariable=self._dl_url_var,
-                     fg_color=BG_INPUT, border_color=BORDER,
+                     height=34, corner_radius=6,
+                     fg_color=BG_INPUT, border_color=BORDER, border_width=1,
                      text_color=TEXT_PRI).pack(side='left', fill='x',
-                                               expand=True, padx=8)
+                                               expand=True, padx=10)
 
-        # Action bar
-        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=44)
+        # Separator
+        ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        # ── Action bar ──────────────────────────────────────────────
+        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=50)
         bar.pack(fill='x')
         bar.pack_propagate(False)
 
-        ctk.CTkButton(bar, text='▶ 下載', width=80, fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER,
-                      command=self._download_url).pack(side='left', padx=6, pady=6)
-        ctk.CTkButton(bar, text='▶▶ 全部下載', width=100, fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER,
+        # Primary actions (left)
+        ctk.CTkButton(bar, text=T('download_btn'), width=95, height=34, corner_radius=6,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      font=('Microsoft JhengHei', 11, 'bold'),
+                      command=self._download_url).pack(side='left', padx=(12, 4), pady=8)
+        ctk.CTkButton(bar, text=T('download_all_btn'), width=120, height=34, corner_radius=6,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._download_all).pack(side='left', padx=4)
 
-        ctk.CTkButton(bar, text='清空', width=60, fg_color='#3a1a20',
+        # Left separator
+        ctk.CTkFrame(bar, width=1, fg_color=BORDER).pack(
+            side='left', fill='y', pady=12, padx=8)
+
+        # Destructive actions (right)
+        ctk.CTkButton(bar, text=T('clear_list'), width=60, height=34, corner_radius=6,
+                      fg_color=ERROR_DIM, border_width=1, border_color='#4a2020',
                       hover_color='#2a1215', text_color=ERROR_C,
-                      command=self._clear_queue).pack(side='right', padx=6, pady=6)
-        ctk.CTkButton(bar, text='全部取消', width=80, fg_color='#3a1a20',
+                      command=self._clear_queue).pack(side='right', padx=(4, 12), pady=8)
+        ctk.CTkButton(bar, text=T('cancel_all'), width=80, height=34, corner_radius=6,
+                      fg_color=ERROR_DIM, border_width=1, border_color='#4a2020',
                       hover_color='#2a1215', text_color=ERROR_C,
                       command=self._cancel_all).pack(side='right', padx=4)
 
-        # Speed limiter
-        ctk.CTkLabel(bar, text='速度:', text_color=TEXT_SEC,
-                     font=('Microsoft YaHei', 10)).pack(side='right', padx=(0, 4))
-        self._speed_var = ctk.StringVar(value='無限制')
-        ctk.CTkOptionMenu(bar, values=['無限制', '1 MB/s', '2 MB/s', '5 MB/s',
+        # Right separator
+        ctk.CTkFrame(bar, width=1, fg_color=BORDER).pack(
+            side='right', fill='y', pady=12, padx=8)
+
+        # Speed control
+        ctk.CTkLabel(bar, text=T('speed_limit'), text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(side='right', padx=(0, 6))
+        self._speed_var = ctk.StringVar(value=T('unlimited'))
+        ctk.CTkOptionMenu(bar, values=[T('unlimited'), '1 MB/s', '2 MB/s', '5 MB/s',
                                         '10 MB/s', '15 MB/s'],
                           variable=self._speed_var,
-                          command=self._on_speed_change, width=100,
+                          command=self._on_speed_change, width=100, height=34,
+                          corner_radius=6,
                           fg_color=BG_INPUT, button_color=ACCENT,
                           button_hover_color=ACCENT_HOVER
-                          ).pack(side='right', padx=4, pady=6)
+                          ).pack(side='right', padx=4, pady=8)
 
-        # Download list
+        # Separator under action bar
+        ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        # ── Download list ───────────────────────────────────────────
         self._dl_scroll = ctk.CTkScrollableFrame(
             tab, fg_color=BG_DARK, corner_radius=0)
         self._dl_scroll.pack(fill='both', expand=True)
 
     # ── Settings Tab ─────────────────────────────────────────────────
     def _build_settings_tab(self):
-        tab = self._tabs.tab('設定')
+        tab = self._tabs.tab(T('tab_settings'))
 
-        outer = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
-        outer.pack(fill='both', expand=True, padx=40, pady=20)
+        outer = ctk.CTkScrollableFrame(tab, fg_color=BG_DARK, corner_radius=0)
+        outer.pack(fill='both', expand=True)
 
-        ctk.CTkLabel(outer, text='設定', font=('Microsoft YaHei', 18, 'bold'),
-                     text_color=TEXT_PRI).pack(anchor='w', pady=(0, 16))
+        # Content container
+        content = ctk.CTkFrame(outer, fg_color='transparent')
+        content.pack(fill='x', padx=40, pady=24)
 
-        # Download settings
-        grp = ctk.CTkFrame(outer, fg_color=BG_SECTION, corner_radius=8)
+        # ── Page title ──────────────────────────────────────────────
+        title_row = ctk.CTkFrame(content, fg_color='transparent')
+        title_row.pack(fill='x', pady=(0, 20))
+        ctk.CTkLabel(title_row, text=T('settings_title'),
+                     font=('Microsoft JhengHei', 20, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+        ctk.CTkLabel(title_row, text=T('settings_desc'),
+                     font=('Microsoft JhengHei', 10),
+                     text_color=TEXT_DIM).pack(side='left', padx=(16, 0))
+
+        # ── Download Settings Card ──────────────────────────────────
+        grp = ctk.CTkFrame(content, fg_color=BG_SECTION, corner_radius=12,
+                            border_width=1, border_color=BORDER)
         grp.pack(fill='x', pady=(0, 16))
 
-        ctk.CTkLabel(grp, text='下載設定', font=('Microsoft YaHei', 12, 'bold'),
-                     text_color=TEXT_SEC).pack(anchor='w', padx=16, pady=(12, 8))
+        # Card header
+        grp_hdr = ctk.CTkFrame(grp, fg_color='transparent')
+        grp_hdr.pack(fill='x', padx=20, pady=(16, 12))
+        ctk.CTkLabel(grp_hdr, text=T('download_settings'),
+                     font=('Microsoft JhengHei', 14, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+
+        ctk.CTkFrame(grp, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
         # Save location
         row_dest = ctk.CTkFrame(grp, fg_color='transparent')
-        row_dest.pack(fill='x', padx=16, pady=4)
-        ctk.CTkLabel(row_dest, text='存放位置', text_color=TEXT_SEC,
-                     width=80).pack(side='left')
+        row_dest.pack(fill='x', padx=20, pady=(16, 2))
+        ctk.CTkLabel(row_dest, text=T('save_location_setting'), text_color=TEXT_PRI,
+                     font=('Microsoft JhengHei', 11), width=90,
+                     anchor='w').pack(side='left')
         ctk.CTkEntry(row_dest, textvariable=self._dest_var,
-                     fg_color=BG_INPUT, border_color=BORDER,
+                     height=34, corner_radius=6,
+                     fg_color=BG_INPUT, border_color=BORDER, border_width=1,
                      text_color=TEXT_PRI).pack(side='left', fill='x',
-                                               expand=True, padx=8)
-        ctk.CTkButton(row_dest, text='瀏覽', width=60, fg_color=BG_CARD,
-                      hover_color='#2a2a4a', text_color=TEXT_PRI,
+                                               expand=True, padx=10)
+        ctk.CTkButton(row_dest, text=T('browse_folder'), width=60, height=34, corner_radius=6,
+                      fg_color=BG_CARD, border_width=1, border_color=BORDER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._pick_dest).pack(side='left')
+        ctk.CTkLabel(grp, text=T('save_location_desc'),
+                     text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
 
         # Speed limit
         row_speed = ctk.CTkFrame(grp, fg_color='transparent')
-        row_speed.pack(fill='x', padx=16, pady=4)
-        ctk.CTkLabel(row_speed, text='速度限制', text_color=TEXT_SEC,
-                     width=80).pack(side='left')
-        ctk.CTkOptionMenu(row_speed, values=['無限制', '1 MB/s', '2 MB/s',
+        row_speed.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(row_speed, text=T('speed_limit_setting'), text_color=TEXT_PRI,
+                     font=('Microsoft JhengHei', 11), width=90,
+                     anchor='w').pack(side='left')
+        ctk.CTkOptionMenu(row_speed, values=[T('unlimited'), '1 MB/s', '2 MB/s',
                                               '5 MB/s', '10 MB/s', '15 MB/s'],
                           variable=self._speed_var,
-                          command=self._on_speed_change, width=120,
+                          command=self._on_speed_change, width=130, height=34,
+                          corner_radius=6,
                           fg_color=BG_INPUT, button_color=ACCENT,
-                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=8)
+                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=10)
+        ctk.CTkLabel(grp, text=T('speed_limit_desc'),
+                     text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
 
         # Concurrent downloads
         row_conc = ctk.CTkFrame(grp, fg_color='transparent')
-        row_conc.pack(fill='x', padx=16, pady=(4, 12))
-        ctk.CTkLabel(row_conc, text='同時下載數', text_color=TEXT_SEC,
-                     width=80).pack(side='left')
+        row_conc.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(row_conc, text=T('concurrent_setting'), text_color=TEXT_PRI,
+                     font=('Microsoft JhengHei', 11), width=90,
+                     anchor='w').pack(side='left')
         self._conc_var = ctk.StringVar(value=str(DEFAULT_CONCURRENT))
         ctk.CTkOptionMenu(row_conc,
                           values=[str(i) for i in range(1, MAX_CONCURRENT + 1)],
                           variable=self._conc_var,
-                          command=self._on_conc_change, width=80,
+                          command=self._on_conc_change, width=80, height=34,
+                          corner_radius=6,
                           fg_color=BG_INPUT, button_color=ACCENT,
-                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=8)
-        ctk.CTkLabel(row_conc, text=f'(最多 {MAX_CONCURRENT})',
-                     text_color=TEXT_DIM).pack(side='left')
+                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=10)
+        ctk.CTkLabel(row_conc, text=T('max_n', n=MAX_CONCURRENT),
+                     text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 10)).pack(side='left')
+        ctk.CTkLabel(grp, text=T('concurrent_desc'),
+                     text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(anchor='w', padx=(110, 0), pady=(0, 20))
 
-        # About
-        about = ctk.CTkFrame(outer, fg_color=BG_SECTION, corner_radius=8)
+        # ── About Card ──────────────────────────────────────────────
+        about = ctk.CTkFrame(content, fg_color=BG_SECTION, corner_radius=12,
+                              border_width=1, border_color=BORDER)
         about.pack(fill='x', pady=(0, 16))
-        ctk.CTkLabel(about, text='關於', font=('Microsoft YaHei', 12, 'bold'),
-                     text_color=TEXT_SEC).pack(anchor='w', padx=16, pady=(12, 4))
-        ctk.CTkLabel(about, text='JableTV & MissAV Downloader',
+
+        about_hdr = ctk.CTkFrame(about, fg_color='transparent')
+        about_hdr.pack(fill='x', padx=20, pady=(16, 12))
+        ctk.CTkLabel(about_hdr, text=T('about'),
+                     font=('Microsoft JhengHei', 14, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+
+        ctk.CTkFrame(about, height=1, fg_color=BORDER).pack(fill='x', padx=20)
+
+        about_body = ctk.CTkFrame(about, fg_color='transparent')
+        about_body.pack(fill='x', padx=20, pady=16)
+
+        ctk.CTkLabel(about_body, text='JableTV & MissAV Downloader',
                      text_color=TEXT_PRI,
-                     font=('Microsoft YaHei', 13)).pack(anchor='w', padx=16)
-        ctk.CTkLabel(about, text='by ALOS (Alos21750)',
+                     font=('Microsoft JhengHei', 15, 'bold')).pack(anchor='w')
+        ctk.CTkLabel(about_body, text='by ALOS (Alos21750)',
                      text_color=ACCENT,
-                     font=('Microsoft YaHei', 11)).pack(anchor='w', padx=16, pady=2)
-        ctk.CTkLabel(about, text='v2.0.0 Material UI  •  僅供學習與研究用途',
+                     font=('Microsoft JhengHei', 12)).pack(anchor='w', pady=(6, 0))
+
+        # Version badge
+        ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
+        ver_badge.pack(anchor='w', pady=(10, 0))
+        ctk.CTkLabel(ver_badge, text='v2.1 Professional',
                      text_color=TEXT_SEC,
-                     font=('Microsoft YaHei', 10)).pack(anchor='w', padx=16, pady=(0, 12))
+                     font=('Consolas', 10)).pack(padx=10, pady=4)
+
+        ctk.CTkLabel(about_body, text=T('disclaimer'),
+                     text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 10)).pack(anchor='w', pady=(10, 0))
 
     # ── Browse logic ─────────────────────────────────────────────────
     def _load_categories(self):
@@ -648,23 +809,21 @@ class ModernApp(ctk.CTk):
             self._videos = data.get('videos', [])
             self.after(0, self._refresh_grid)
             self.after(0, lambda: self._page_lbl.configure(
-                text=f'第 {self._page} 頁'))
+                text=T('page_n', n=self._page)))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _refresh_grid(self):
         for w in self._grid_scroll.winfo_children():
             w.destroy()
-        self._card_widgets = {}  # url -> {card, sel_btn}
+        self._card_widgets = {}
 
         if not self._videos:
-            ctk.CTkLabel(self._grid_scroll, text='沒有找到影片',
+            ctk.CTkLabel(self._grid_scroll, text=T('no_results'),
                          text_color=TEXT_DIM,
-                         font=('Microsoft YaHei', 14)).pack(pady=40)
+                         font=('Microsoft JhengHei', 14)).pack(pady=40)
             return
 
-        # Bump generation — any in-flight thumbnail loads from older
-        # pages will find a mismatch and silently drop their result.
         self._grid_gen += 1
         gen = self._grid_gen
 
@@ -673,7 +832,7 @@ class ModernApp(ctk.CTk):
         for i, v in enumerate(self._videos):
             if i % 4 == 0:
                 row_frame = ctk.CTkFrame(self._grid_scroll, fg_color='transparent')
-                row_frame.pack(fill='x', padx=8, pady=4)
+                row_frame.pack(fill='x', padx=10, pady=4)
 
             url = v.get('url', '')
             title = v.get('title', '')
@@ -681,65 +840,64 @@ class ModernApp(ctk.CTk):
             thumb_url = v.get('thumbnail', '')
             is_sel = url in self._selected_urls
 
-            card = ctk.CTkFrame(row_frame, fg_color=BG_CARD, corner_radius=8,
+            card = ctk.CTkFrame(row_frame, fg_color=BG_CARD, corner_radius=10,
                                 border_width=2,
                                 border_color=ACCENT if is_sel else BORDER)
-            card.pack(side='left', padx=4, pady=4, fill='x', expand=True)
+            card.pack(side='left', padx=5, pady=5, fill='x', expand=True)
 
-            # Thumbnail placeholder (fixed 16:9 area)
-            thumb_holder = ctk.CTkFrame(card, fg_color='#0a0a18',
-                                         height=_THUMB_SIZE[1], corner_radius=6)
-            thumb_holder.pack(fill='x', padx=6, pady=(6, 0))
+            # Thumbnail placeholder (16:9)
+            thumb_holder = ctk.CTkFrame(card, fg_color=BG_SIDEBAR,
+                                         height=_THUMB_SIZE[1], corner_radius=8)
+            thumb_holder.pack(fill='x', padx=8, pady=(8, 0))
             thumb_holder.pack_propagate(False)
-            thumb_lbl = ctk.CTkLabel(thumb_holder, text='載入中...',
+            thumb_lbl = ctk.CTkLabel(thumb_holder, text=T('loading_browse'),
                                       text_color=TEXT_DIM,
                                       fg_color='transparent',
-                                      font=('Microsoft YaHei', 10))
+                                      font=('Microsoft JhengHei', 10))
             thumb_lbl.pack(expand=True)
 
-            # Duration badge over thumbnail (bottom-right)
+            # Duration badge
             if dur:
-                dur_lbl = ctk.CTkLabel(thumb_holder, text=dur,
+                dur_lbl = ctk.CTkLabel(thumb_holder, text=f' {dur} ',
                                         text_color='#ffffff',
                                         fg_color='#000000',
-                                        corner_radius=3,
+                                        corner_radius=4,
                                         font=('Consolas', 9, 'bold'))
-                dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-4, y=-4)
+                dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-6, y=-6)
 
             # Title
-            title_text = title[:60] + '…' if len(title) > 60 else title
+            title_text = title[:55] + '...' if len(title) > 55 else title
             ctk.CTkLabel(card, text=title_text, text_color=TEXT_PRI,
-                         font=('Microsoft YaHei', 10),
-                         wraplength=240, justify='left').pack(
-                padx=8, pady=(6, 2), anchor='w')
+                         font=('Microsoft JhengHei', 10),
+                         wraplength=230, justify='left').pack(
+                padx=10, pady=(8, 2), anchor='w')
 
-            # Bottom row: select button only (duration moved to thumbnail)
+            # Bottom row
             bottom = ctk.CTkFrame(card, fg_color='transparent')
-            bottom.pack(fill='x', padx=8, pady=(0, 8))
+            bottom.pack(fill='x', padx=10, pady=(0, 10))
 
-            sel_text = '✓ 已選' if is_sel else '選取'
+            sel_text = ('✓ ' + T('selected')) if is_sel else T('select')
             sel_btn = ctk.CTkButton(
-                bottom, text=sel_text, width=60, height=24,
+                bottom, text=sel_text, width=64, height=26,
+                corner_radius=6,
                 fg_color=ACCENT if is_sel else BG_INPUT,
                 hover_color=ACCENT_HOVER,
-                font=('Microsoft YaHei', 9),
+                font=('Microsoft JhengHei', 9),
                 command=lambda u=url: self._toggle_select(u)
             )
             sel_btn.pack(side='right')
 
-            # Store widget refs for in-place selection updates
             self._card_widgets[url] = {'card': card, 'sel_btn': sel_btn}
 
-            # Make the entire card clickable for selection
+            # Clickable card
             def _bind_click(widget, video_url=url):
                 widget.bind('<Button-1>', lambda e, u=video_url: self._toggle_select(u))
-                # Cursor change to indicate clickability
                 widget.configure(cursor='hand2')
             _bind_click(card)
             _bind_click(thumb_holder)
             _bind_click(thumb_lbl)
 
-            # Kick off background thumbnail load
+            # Background thumbnail load
             if thumb_url:
                 self._load_thumb_async(thumb_url, thumb_lbl, gen)
             else:
@@ -782,18 +940,38 @@ class ModernApp(ctk.CTk):
             try:
                 w['card'].configure(border_color=ACCENT if is_sel else BORDER)
                 w['sel_btn'].configure(
-                    text='✓ 已選' if is_sel else '選取',
+                    text=('✓ ' + T('selected')) if is_sel else T('select'),
                     fg_color=ACCENT if is_sel else BG_INPUT)
             except Exception:
                 pass
         n = len(self._selected_urls)
-        self._sel_lbl.configure(text=f'已選 {n} 部' if n else '')
+        self._sel_lbl.configure(text=f'{n} {T("selected")}' if n else '')
 
     def _goto_page(self, p: int):
         if p < 1:
             return
         self._page = p
         self._load_page()
+
+    def _jump_to_page(self):
+        """Jump to page number entered in the page-jump field."""
+        try:
+            p = int(self._page_jump_var.get().strip())
+            if p >= 1:
+                self._goto_page(p)
+        except (ValueError, TypeError):
+            pass
+        self._page_jump_var.set('')
+
+    def _select_all_on_page(self):
+        """Select all videos currently displayed on the page."""
+        for v in self._videos:
+            url = v.get('url', '')
+            if url:
+                self._selected_urls.add(url)
+        self._refresh_grid()
+        n = len(self._selected_urls)
+        self._sel_lbl.configure(text=f'{n} {T("selected")}' if n else '')
 
     def _on_site_change(self, val):
         self._site_key = val
@@ -822,7 +1000,8 @@ class ModernApp(ctk.CTk):
         if self._site_key == 'JableTV':
             self._current_base_url = f'https://jable.tv/search/?q={q}'
         else:
-            self._current_base_url = f'https://missav.ai/dm265/cn/search?query={q}'
+            lang = T('missav_lang')
+            self._current_base_url = f'https://missav.ai/dm265/{lang}/search?query={q}'
         self._page = 1
         self._has_next = True
         self._selected_urls.clear()
@@ -845,13 +1024,17 @@ class ModernApp(ctk.CTk):
 
         ctk.CTkLabel(self._sidebar, text='標籤選片',
                      text_color=ACCENT,
-                     font=('Microsoft YaHei', 12, 'bold')).pack(
-            anchor='w', padx=8, pady=(8, 4))
+                     font=('Microsoft JhengHei', 12, 'bold')).pack(
+            anchor='w', padx=10, pady=(10, 6))
+
+        # Subtle divider
+        ctk.CTkFrame(self._sidebar, height=1,
+                     fg_color=BORDER).pack(fill='x', padx=8, pady=(0, 6))
 
         if self._site_key != 'JableTV':
             ctk.CTkLabel(self._sidebar, text='僅 JableTV\n支援標籤',
                          text_color=TEXT_DIM,
-                         font=('Microsoft YaHei', 10)).pack(pady=20)
+                         font=('Microsoft JhengHei', 10)).pack(pady=20)
             return
 
         tags = JableTVBrowser.SIDEBAR_TAGS
@@ -863,24 +1046,24 @@ class ModernApp(ctk.CTk):
             hdr = ctk.CTkButton(
                 self._sidebar,
                 text=f'{arrow} {group_name} ({len(tag_list)})',
-                fg_color='#0e0e20', hover_color='#141430',
+                fg_color='transparent', hover_color='#141430',
                 text_color=TEXT_SEC, anchor='w',
-                font=('Microsoft YaHei', 10, 'bold'),
-                height=28, corner_radius=0,
+                font=('Microsoft JhengHei', 10, 'bold'),
+                height=30, corner_radius=4,
                 command=lambda g=group_name: self._toggle_group(g))
-            hdr.pack(fill='x', padx=0, pady=0)
+            hdr.pack(fill='x', padx=4, pady=1)
 
             if expanded:
                 for name, slug in tag_list:
                     tag_url = JableTVBrowser.tag_url(slug)
                     btn = ctk.CTkButton(
                         self._sidebar, text=name,
-                        fg_color='transparent', hover_color='#1a1a30',
+                        fg_color='transparent', hover_color='#1a1a34',
                         text_color=TEXT_SEC, anchor='w',
-                        font=('Microsoft YaHei', 10),
-                        height=24, corner_radius=0,
+                        font=('Microsoft JhengHei', 10),
+                        height=26, corner_radius=4,
                         command=lambda u=tag_url, n=name: self._on_tag_click(u, n))
-                    btn.pack(fill='x', padx=(12, 0), pady=0)
+                    btn.pack(fill='x', padx=(16, 4), pady=0)
 
     def _toggle_group(self, group: str):
         self._sidebar_expanded[group] = not self._sidebar_expanded.get(group, False)
@@ -913,12 +1096,70 @@ class ModernApp(ctk.CTk):
         url = self._dl_url_var.get().strip()
         if not url:
             return
-        if not M3U8Sites.VaildateUrl(url):
-            print(f'不支援的網址: {url}')
+        # Direct video URL
+        if M3U8Sites.VaildateUrl(url):
+            dest = self._dest_var.get() or 'download'
+            self._dlmgr.add_item(url, state='等待中')
+            self._dlmgr.enqueue(url, dest)
             return
+        # Listing / actress / category URL — crawl all videos
+        if self._is_listing_url(url):
+            self._status_lbl.configure(text=T('crawling_url'))
+            threading.Thread(target=self._crawl_listing, args=(url,),
+                             daemon=True).start()
+            return
+        print(T('url_not_supported') + f': {url}')
+
+    def _is_listing_url(self, url: str) -> bool:
+        """Check if URL is a JableTV or MissAV listing/category/actress page."""
+        return (url.startswith('https://jable.tv/') or
+                bool(re.match(r'https://(?:www\.)?missav\.(?:ai|ws)/', url)))
+
+    def _crawl_listing(self, url: str):
+        """Crawl a listing URL across all pages; add every video to the queue."""
         dest = self._dest_var.get() or 'download'
-        self._dlmgr.add_item(url, state='等待中')
-        self._dlmgr.enqueue(url, dest)
+        seen: set[str] = set()
+        is_jable = url.startswith('https://jable.tv/')
+        max_pages = 50
+
+        for page in range(1, max_pages + 1):
+            try:
+                if is_jable:
+                    if page == 1:
+                        page_url = url
+                    elif '?' in url:
+                        page_url = f'{url}&from_videos={page}'
+                    else:
+                        page_url = f'{url.rstrip("/")}/?from={page}'
+                    videos = JableTVBrowser.fetch_page(page_url)
+                else:
+                    page_url = MissAVBrowser.page_url(url, page)
+                    videos = MissAVBrowser.fetch_page(page_url)
+            except Exception:
+                break
+
+            if not videos:
+                break
+
+            new_count = 0
+            for v in videos:
+                video_url = v.get('url', '')
+                if video_url and video_url not in seen and M3U8Sites.VaildateUrl(video_url):
+                    seen.add(video_url)
+                    new_count += 1
+                    name = v.get('title', '')
+                    self._dlmgr.add_item(video_url, name=name, state='等待中')
+                    self._dlmgr.enqueue(video_url, dest)
+
+            if new_count == 0:
+                break  # No new videos on this page, stop
+
+            self.after(0, lambda n=len(seen): self._status_lbl.configure(
+                text=T('crawling_url') + f' ({n})'))
+
+        n = len(seen)
+        self.after(0, lambda: self._status_lbl.configure(
+            text=T('crawl_added', n=n)))
 
     def _download_all(self):
         dest = self._dest_var.get() or 'download'
@@ -941,7 +1182,7 @@ class ModernApp(ctk.CTk):
 
     def _on_speed_change(self, val):
         from M3U8Sites.M3U8Crawler import speed_limiter
-        if val == '無限制':
+        if val in ('無限制', 'Unlimited'):
             speed_limiter.set_limit(0)
         else:
             mbps = float(val.split()[0])
@@ -997,7 +1238,7 @@ class ModernApp(ctk.CTk):
                 self._dl_empty_lbl = ctk.CTkLabel(
                     self._dl_scroll, text='下載清單是空的',
                     text_color=TEXT_DIM,
-                    font=('Microsoft YaHei', 13))
+                    font=('Microsoft JhengHei', 13))
                 self._dl_empty_lbl.pack(pady=40)
         else:
             if self._dl_empty_lbl is not None:
@@ -1033,24 +1274,26 @@ class ModernApp(ctk.CTk):
         """Build one download row once; return widget handles for in-place updates."""
         color = self._STATE_COLORS.get(item.state, TEXT_SEC)
 
-        row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=4,
-                           height=40)
-        row.pack(fill='x', padx=4, pady=2)
+        row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=6,
+                           border_width=1, border_color=BORDER_CARD,
+                           height=48)
+        row.pack(fill='x', padx=6, pady=3)
         row.pack_propagate(False)
 
         state_lbl = ctk.CTkLabel(row, text=item.state or '—', text_color=color,
-                                 font=('Microsoft YaHei', 10, 'bold'),
-                                 width=60)
-        state_lbl.pack(side='left', padx=8)
+                                 font=('Microsoft JhengHei', 10, 'bold'),
+                                 width=68)
+        state_lbl.pack(side='left', padx=(12, 4))
 
         name_lbl = ctk.CTkLabel(row, text=item.name or item.url,
                                 text_color=TEXT_PRI,
-                                font=('Microsoft YaHei', 10),
+                                font=('Microsoft JhengHei', 10),
                                 anchor='w')
-        name_lbl.pack(side='left', fill='x', expand=True, padx=4)
+        name_lbl.pack(side='left', fill='x', expand=True, padx=6)
 
-        # Progress widgets (always present; hidden when not downloading)
-        pb = ctk.CTkProgressBar(row, width=120, height=12,
+        # Progress widgets (created once, packed/unpacked dynamically)
+        pb = ctk.CTkProgressBar(row, width=130, height=10,
+                                corner_radius=5,
                                 fg_color='#1a1a2e',
                                 progress_color=ACCENT)
         pb.set(max(0.0, min(1.0, item.progress / 100)))
@@ -1061,11 +1304,12 @@ class ModernApp(ctk.CTk):
 
         # Remove button
         remove_btn = ctk.CTkButton(
-            row, text='✕', width=28, height=28,
-            fg_color='transparent', hover_color='#3a1a20',
+            row, text='✕', width=30, height=30,
+            corner_radius=6,
+            fg_color='transparent', hover_color=ERROR_DIM,
             text_color=TEXT_DIM, font=('Consolas', 12),
             command=lambda u=item.url: self._dlmgr.remove_item(u))
-        remove_btn.pack(side='right', padx=4)
+        remove_btn.pack(side='right', padx=6)
 
         widgets = {
             'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
@@ -1165,6 +1409,6 @@ class ModernApp(ctk.CTk):
         self.destroy()
 
 
-def gui_modern_main(url: str = '', dest: str = 'download'):
-    app = ModernApp(url=url, dest=dest)
+def gui_modern_main(url: str = '', dest: str = 'download', lang: str = 'zh'):
+    app = ModernApp(url=url, dest=dest, lang=lang)
     app.mainloop()

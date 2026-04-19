@@ -6,18 +6,20 @@ import ctypes
 import os
 import sys
 
-# Enable DPI awareness BEFORE any Tk/GUI imports
+# Force DPI-unaware so screenshots capture at 1:1 logical pixels
 try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    ctypes.windll.shcore.SetProcessDpiAwareness(0)
 except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    pass
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from PIL import ImageGrab  # noqa: E402
+
+import customtkinter as ctk  # noqa: E402
+ctk.deactivate_automatic_dpi_awareness()
+ctk.set_widget_scaling(1.0)
+ctk.set_window_scaling(1.0)
 
 from gui_modern import DownloadItem, ModernApp  # noqa: E402
 
@@ -26,28 +28,28 @@ os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 
 def capture_window(win, filename):
-    """Capture the app window by its own HWND."""
+    """Capture the app content area — maximized + topmost so nothing bleeds through."""
     filepath = os.path.join(SCREENSHOTS_DIR, filename)
     win.update_idletasks()
+    win.attributes('-topmost', True)
     win.lift()
     win.focus_force()
     win.update()
+    # Let the window fully repaint after tab switch
+    import time
+    time.sleep(0.3)
+    win.update()
 
-    hwnd = ctypes.windll.user32.FindWindowW(None, win.title())
-    if not hwnd:
-        hwnd = int(win.wm_frame(), 16)
+    x = win.winfo_rootx()
+    y = win.winfo_rooty()
+    w = win.winfo_width()
+    h = win.winfo_height()
 
-    class RECT(ctypes.Structure):
-        _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
-                    ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
-
-    rect = RECT()
-    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-    img = ImageGrab.grab(bbox=(rect.left + 1, rect.top + 1,
-                               rect.right - 1, rect.bottom - 1))
+    img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
     img.save(filepath, optimize=True)
-    w, h = img.size
-    print(f'[screenshot] {filename}  {w}x{h}  ({os.path.getsize(filepath):,} B)')
+    pw, ph = img.size
+    print(f'[screenshot] {filename}  {pw}x{ph}  ({os.path.getsize(filepath):,} B)')
+    win.attributes('-topmost', False)
 
 
 def populate_downloads(app: ModernApp):
@@ -85,7 +87,11 @@ def populate_downloads(app: ModernApp):
 
 def run():
     app = ModernApp(url='', dest='download')
-    app.state('zoomed')
+    # True fullscreen — covers entire screen, no title bar, no other windows visible
+    app.overrideredirect(True)
+    screen_w = app.winfo_screenwidth()
+    screen_h = app.winfo_screenheight()
+    app.geometry(f'{screen_w}x{screen_h}+0+0')
     app.update_idletasks()
 
     step = [0]
