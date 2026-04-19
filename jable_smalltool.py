@@ -407,6 +407,7 @@ class SmallToolWorker:
 
             max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
             reached_baseline = False
+            consecutive_skips = 0
 
             for page in range(1, max_pages + 1):
                 if self._stop.is_set():
@@ -441,6 +442,11 @@ class SmallToolWorker:
                         time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
                         if video_dt is None:
                             self._log(f'    [SKIP] no date ({rel_text!r}): {vurl}')
+                            consecutive_skips += 1
+                            if consecutive_skips >= 10:
+                                self._log(f'  10 consecutive skips — moving to next category.')
+                                reached_baseline = True
+                                break
                             continue
                         if video_dt < baseline_dt:
                             slug = vurl.rstrip('/').split('/')[-1]
@@ -448,6 +454,7 @@ class SmallToolWorker:
                             self._mark_seen(vurl, v.get('title', ''), skipped=True)
                             reached_baseline = True
                             break
+                        consecutive_skips = 0
                         self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
                     else:
                         # MissAV: fetch detail page for release date
@@ -457,7 +464,13 @@ class SmallToolWorker:
                             slug = vurl.rstrip('/').split('/')[-1]
                             self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
                             self._mark_seen(vurl, v.get('title', ''), skipped=True)
-                            continue  # skip but don't stop — MissAV is not date-sorted
+                            consecutive_skips += 1
+                            if consecutive_skips >= 10:
+                                self._log(f'  10 consecutive skips — moving to next category.')
+                                reached_baseline = True
+                                break
+                            continue
+                        consecutive_skips = 0
                         if video_dt:
                             self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
                         else:
