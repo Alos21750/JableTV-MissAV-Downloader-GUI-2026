@@ -285,6 +285,54 @@ class SmallToolWorker:
         except Exception as e:
             return (None, f'ERR:{type(e).__name__}')
 
+    def _fetch_missav_video_date(self, vurl: str) -> tuple[Optional[datetime], str]:
+        """Fetch a MissAV video page and extract its release date."""
+        if cloudscraper is None or BeautifulSoup is None:
+            return (None, '')
+        try:
+            scraper = MissAVBrowser._get_scraper()
+            r = scraper.get(vurl, timeout=30)
+            if r.status_code != 200:
+                return (None, f'HTTP {r.status_code}')
+
+            soup = BeautifulSoup(r.content, 'html.parser')
+            page_text = soup.get_text(' ', strip=True)
+
+            # Method 1: date near known keywords (発売日, Release Date, etc.)
+            for pat in [
+                r'(?:発売日|發售日|配信開始日|Release\s*Date|上架日期|更新)\s*[:：]?\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})',
+                r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s*(?:発売|release|上架)',
+            ]:
+                m = re.search(pat, page_text, re.I)
+                if m:
+                    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    if 2000 <= y <= 2099 and 1 <= mo <= 12 and 1 <= d <= 31:
+                        return (datetime(y, mo, d, tzinfo=timezone.utc),
+                                f'{y}-{mo:02d}-{d:02d}')
+
+            # Method 2: meta tags (og / video release_date)
+            for meta in soup.find_all('meta'):
+                prop = (meta.get('property') or meta.get('name') or '').lower()
+                if any(k in prop for k in ('release', 'date', 'published')):
+                    m = re.match(r'(\d{4})-(\d{2})-(\d{2})', meta.get('content', ''))
+                    if m:
+                        return (datetime(int(m.group(1)), int(m.group(2)),
+                                         int(m.group(3)), tzinfo=timezone.utc),
+                                m.group(0))
+
+            # Method 3: <time> element
+            time_el = soup.find('time', attrs={'datetime': True})
+            if time_el:
+                m = re.match(r'(\d{4})-(\d{2})-(\d{2})', time_el['datetime'])
+                if m:
+                    return (datetime(int(m.group(1)), int(m.group(2)),
+                                     int(m.group(3)), tzinfo=timezone.utc),
+                            m.group(0))
+
+            return (None, '')
+        except Exception as e:
+            return (None, f'ERR:{type(e).__name__}')
+
     def _fetch_page_for_site(self, site_name: str, url: str) -> list:
         """Fetch a listing page using the appropriate browser for the site."""
         browser = SITES[site_name]['browser']
@@ -402,8 +450,18 @@ class SmallToolWorker:
                             break
                         self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
                     else:
-                        # MissAV: no easy date check, just download unseen
-                        self._log(f'    [KEEP] {v.get("title", vurl)[:60]}')
+                        # MissAV: fetch detail page for release date
+                        video_dt, rel_text = self._fetch_missav_video_date(vurl)
+                        time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
+                        if video_dt is not None and video_dt < baseline_dt:
+                            slug = vurl.rstrip('/').split('/')[-1]
+                            self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
+                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            continue  # skip but don't stop — MissAV is not date-sorted
+                        if video_dt:
+                            self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
+                        else:
+                            self._log(f'    [KEEP] {v.get("title", vurl)[:60]}')
 
                     v['_site'] = site_name
                     all_new_videos.append(v)
@@ -517,6 +575,30 @@ class SmallToolApp(tk.Tk):
         self.after(500, self._refresh_progress)
 
     def _build_ui(self):
+        # ── TTK styles (larger checkboxes + progress bar) ───────────
+        self._style = ttk.Style()
+        self._style.theme_use('clam')
+        self._style.configure('Cat.TCheckbutton',
+                              background=BG_CARD, foreground=TEXT_PRI,
+                              font=('Microsoft JhengHei', 10),
+                              indicatorsize=18)
+        self._style.map('Cat.TCheckbutton',
+                        background=[('active', BG_CARD)],
+                        indicatorcolor=[('selected', ACCENT),
+                                        ('!selected', BG_INPUT)])
+        self._style.configure('All.TCheckbutton',
+                              background=BG_CARD, foreground=WARNING,
+                              font=('Microsoft JhengHei', 10, 'bold'),
+                              indicatorsize=18)
+        self._style.map('All.TCheckbutton',
+                        background=[('active', BG_CARD)],
+                        indicatorcolor=[('selected', ACCENT),
+                                        ('!selected', BG_INPUT)])
+        self._style.configure('DL.Horizontal.TProgressbar',
+                              troughcolor=BG_INPUT,
+                              background=ACCENT,
+                              thickness=16)
+
         # ── Header ──────────────────────────────────────────────────
         hdr = tk.Frame(self, bg=BG_HEADER, height=48)
         hdr.pack(fill='x')
@@ -590,15 +672,12 @@ class SmallToolApp(tk.Tk):
             all_key = f'{site_name}|__all__'
             self._check_vars[all_key] = all_var
 
-            all_cb = tk.Checkbutton(
+            all_cb = ttk.Checkbutton(
                 site_frame, text='全選',
-                bg=BG_CARD, fg=WARNING,
-                selectcolor=BG_INPUT,
-                activebackground=BG_CARD, activeforeground=WARNING,
-                font=('Microsoft JhengHei', 9, 'bold'),
+                style='All.TCheckbutton',
                 variable=all_var,
                 command=lambda sn=site_name: self._toggle_select_all(sn))
-            all_cb.pack(anchor='w')
+            all_cb.pack(anchor='w', pady=(2, 0))
 
             # Separator
             tk.Frame(site_frame, bg=BORDER, height=1).pack(fill='x', pady=3)
@@ -613,15 +692,12 @@ class SmallToolApp(tk.Tk):
                 key = f'{site_name}|{cat_name}'
                 var = tk.BooleanVar(value=False)
                 self._check_vars[key] = var
-                cb = tk.Checkbutton(
+                cb = ttk.Checkbutton(
                     cat_grid, text=cat_name,
-                    bg=BG_CARD, fg=TEXT_PRI,
-                    selectcolor=BG_INPUT,
-                    activebackground=BG_CARD, activeforeground=TEXT_PRI,
-                    font=('Microsoft JhengHei', 9),
+                    style='Cat.TCheckbutton',
                     variable=var)
                 row, col = divmod(i, cols)
-                cb.grid(row=row, column=col, sticky='w', padx=4)
+                cb.grid(row=row, column=col, sticky='w', padx=6, pady=2)
 
         # ── Control row ─────────────────────────────────────────────
         ctrl = tk.Frame(self, bg=BG_DARK)
@@ -672,13 +748,6 @@ class SmallToolApp(tk.Tk):
 
         bar_row = tk.Frame(prog_outer, bg=BG_CARD)
         bar_row.pack(fill='x', pady=(3, 0))
-
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure('DL.Horizontal.TProgressbar',
-                        troughcolor=BG_INPUT,
-                        background=ACCENT,
-                        thickness=16)
 
         self._prog_bar = ttk.Progressbar(
             bar_row, style='DL.Horizontal.TProgressbar',

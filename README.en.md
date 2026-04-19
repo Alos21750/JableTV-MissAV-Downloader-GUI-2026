@@ -6,11 +6,14 @@
 </p>
 
 <h1 align="center">JableTV & MissAV Downloader — Material Design 2026</h1>
+<p align="center"><strong>Jable TV Downloader ｜ MissAV Downloader ｜ Desktop GUI App</strong></p>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
   <a href="./README.md">繁體中文</a> ｜ English
 </p>
+
+> The best desktop tool for **Jable TV download** and **MissAV download**. Full GUI with built-in video browser, keyword search, multi-select batch download, and up to 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run, no Python or installation needed. Supports FC2 videos, Chinese subtitle filtering, actress/category page bulk download, and M3U8/HLS streams.
 
 ---
 
@@ -18,22 +21,22 @@
 
 ### JableTV Browse
 <p align="center">
-  <img src="./img/screenshot_browse_jable.png" width="800" alt="JableTV Browse" />
+  <img src="./img/screenshot_browse_jable.png" width="800" alt="Jable TV download GUI — browse and select videos from JableTV" />
 </p>
 
 ### MissAV Browse
 <p align="center">
-  <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV Browse" />
+  <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV download GUI — browse and select videos from MissAV" />
 </p>
 
 ### Download Manager (Live Progress Bars)
 <p align="center">
-  <img src="./img/screenshot_download.png" width="800" alt="Download Manager" />
+  <img src="./img/screenshot_download.png" width="800" alt="Jable TV MissAV batch download manager with live progress bars" />
 </p>
 
 ### Settings
 <p align="center">
-  <img src="./img/screenshot_settings.png" width="800" alt="Settings" />
+  <img src="./img/screenshot_settings.png" width="800" alt="JableTV MissAV Downloader settings — speed limit and concurrent downloads" />
 </p>
 
 ---
@@ -143,6 +146,10 @@ Based on [hcjohn463/JableDownload](https://github.com/hcjohn463/JableDownload) a
 ## Author
 
 **ALOS** — [GitHub](https://github.com/Alos21750)
+
+## Related Keywords
+
+`Jable TV download` `JableTV downloader` `Jable video download` `MissAV download` `MissAV downloader` `Jable TV downloader GUI` `jable.tv batch download` `missav batch download` `M3U8 downloader` `HLS video download` `FC2 download` `Chinese subtitle download` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool` `jable 下載` `missav 下載器`
 
 ## License
 
