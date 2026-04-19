@@ -373,7 +373,7 @@ class ModernApp(ctk.CTk):
                      text_color=ACCENT).pack(side='left', padx=(8, 0))
 
         # Right info
-        ctk.CTkLabel(header, text='v2.1 Professional  |  by ALOS',
+        ctk.CTkLabel(header, text='v2.1.5  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right', padx=20)
 
@@ -766,7 +766,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.1 Professional',
+        ctk.CTkLabel(ver_badge, text='v2.1.5',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -778,7 +778,10 @@ class ModernApp(ctk.CTk):
     def _load_categories(self):
         browser = SITES[self._site_key]['browser']
         try:
-            cats = browser.fetch_categories()
+            if self._site_key == 'MissAV':
+                cats = browser.fetch_categories(lang=T('missav_lang'))
+            else:
+                cats = browser.fetch_categories()
         except Exception:
             cats = []
         self._categories = cats
@@ -1101,13 +1104,16 @@ class ModernApp(ctk.CTk):
             dest = self._dest_var.get() or 'download'
             self._dlmgr.add_item(url, state='等待中')
             self._dlmgr.enqueue(url, dest)
+            self._dl_url_var.set('')
             return
         # Listing / actress / category URL — crawl all videos
         if self._is_listing_url(url):
+            self._dl_url_var.set('')
             self._status_lbl.configure(text=T('crawling_url'))
             threading.Thread(target=self._crawl_listing, args=(url,),
                              daemon=True).start()
             return
+        self._status_lbl.configure(text=T('url_not_supported'))
         print(T('url_not_supported') + f': {url}')
 
     def _is_listing_url(self, url: str) -> bool:
@@ -1135,10 +1141,13 @@ class ModernApp(ctk.CTk):
                 else:
                     page_url = MissAVBrowser.page_url(url, page)
                     videos = MissAVBrowser.fetch_page(page_url)
-            except Exception:
+            except Exception as e:
+                print(f'[crawl] page {page} error: {e}')
                 break
 
             if not videos:
+                if page == 1:
+                    print(f'[crawl] No videos found on first page: {url}')
                 break
 
             new_count = 0
@@ -1162,6 +1171,20 @@ class ModernApp(ctk.CTk):
             text=T('crawl_added', n=n)))
 
     def _download_all(self):
+        # If the URL field has a listing URL, crawl it first
+        url = self._dl_url_var.get().strip()
+        if url:
+            if M3U8Sites.VaildateUrl(url):
+                dest = self._dest_var.get() or 'download'
+                self._dlmgr.add_item(url, state='等待中')
+                self._dlmgr.enqueue(url, dest)
+                self._dl_url_var.set('')
+            elif self._is_listing_url(url):
+                self._dl_url_var.set('')
+                self._status_lbl.configure(text=T('crawling_url'))
+                threading.Thread(target=self._crawl_listing, args=(url,),
+                                 daemon=True).start()
+                return
         dest = self._dest_var.get() or 'download'
         count = 0
         for item in self._dlmgr.get_items():
