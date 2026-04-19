@@ -113,23 +113,22 @@ class SiteMissAV(M3U8Crawler):
 
 class MissAVBrowser:
     """Fetches categories and video listings from missav.ai for the browse GUI."""
-    _url_root = 'https://missav.ai/dm265/cn'
     _scraper = None
 
-    # Fixed category list (from nav)
+    # Fixed category list — {lang} placeholder replaced at runtime by fetch_categories()
     CATEGORIES = [
-        ('今日熱門', 'https://missav.ai/dm291/cn/today-hot'),
-        ('本週熱門', 'https://missav.ai/dm169/cn/weekly-hot'),
-        ('本月熱門', 'https://missav.ai/dm263/cn/monthly-hot'),
-        ('中文字幕', 'https://missav.ai/dm265/cn/chinese-subtitle'),
-        ('最近更新', 'https://missav.ai/dm515/cn/new'),
-        ('新作上市', 'https://missav.ai/dm590/cn/release'),
-        ('無碼流出', 'https://missav.ai/dm628/cn/uncensored-leak'),
-        ('SIRO', 'https://missav.ai/dm23/cn/siro'),
-        ('FC2', 'https://missav.ai/dm150/cn/fc2'),
-        ('麻豆傳媒', 'https://missav.ai/dm35/cn/madou'),
-        ('東京熱', 'https://missav.ai/dm29/cn/tokyohot'),
-        ('一本道', 'https://missav.ai/dm2469695/cn/1pondo'),
+        ('今日熱門', 'https://missav.ai/dm291/{lang}/today-hot'),
+        ('本週熱門', 'https://missav.ai/dm169/{lang}/weekly-hot'),
+        ('本月熱門', 'https://missav.ai/dm263/{lang}/monthly-hot'),
+        ('中文字幕', 'https://missav.ai/dm265/{lang}/chinese-subtitle'),
+        ('最近更新', 'https://missav.ai/dm515/{lang}/new'),
+        ('新作上市', 'https://missav.ai/dm590/{lang}/release'),
+        ('無碼流出', 'https://missav.ai/dm628/{lang}/uncensored-leak'),
+        ('SIRO', 'https://missav.ai/dm23/{lang}/siro'),
+        ('FC2', 'https://missav.ai/dm150/{lang}/fc2'),
+        ('麻豆傳媒', 'https://missav.ai/dm35/{lang}/madou'),
+        ('東京熱', 'https://missav.ai/dm29/{lang}/tokyohot'),
+        ('一本道', 'https://missav.ai/dm2469695/{lang}/1pondo'),
     ]
 
     @classmethod
@@ -139,8 +138,10 @@ class MissAVBrowser:
         return cls._scraper
 
     @classmethod
-    def fetch_categories(cls):
-        return [{'name': name, 'url': url, 'count': 0} for name, url in cls.CATEGORIES]
+    def fetch_categories(cls, lang='cn'):
+        """Return categories with URLs localized to *lang* (cn, en, ja, …)."""
+        return [{'name': name, 'url': url.format(lang=lang), 'count': 0}
+                for name, url in cls.CATEGORIES]
 
     @classmethod
     def fetch_page(cls, url):
@@ -151,18 +152,23 @@ class MissAVBrowser:
                 return []
             soup = BeautifulSoup(r.content, 'html.parser')
             cards = soup.select('div.thumbnail')
+            # Fallback: some actress/genre pages use a different grid layout
+            if not cards:
+                cards = soup.select('div.group, article.video-item, div[class*="grid"] > div')
             videos = []
             for card in cards:
                 link = card.select_one('a[href*="missav"]')
                 if not link:
                     continue
                 video_url = link.get('href', '')
-                # Normalize: ensure it's a video page URL
+                # Normalize: ensure it's a video page URL (contains /<lang>/<slug>)
                 if not re.search(r'/[a-z]{2}/[a-z]', video_url):
-                    continue
+                    # Also accept bare video slugs like /sone-543
+                    if not re.search(r'/[a-zA-Z][a-zA-Z0-9]*-\d+', video_url):
+                        continue
 
                 img = card.select_one('img')
-                thumbnail = img.get('data-src', '') if img else ''
+                thumbnail = img.get('data-src', '') or (img.get('src', '') if img else '')
                 title_text = img.get('alt', '') if img else ''
 
                 # Try the text link inside div.my-2
@@ -185,9 +191,9 @@ class MissAVBrowser:
             return []
 
     @classmethod
-    def search(cls, query):
+    def search(cls, query, lang='cn'):
         """Search for videos matching query."""
-        url = f'https://missav.ai/dm265/cn/search?query={query}'
+        url = f'https://missav.ai/dm265/{lang}/search?query={query}'
         return cls.fetch_page(url)
 
     @classmethod
