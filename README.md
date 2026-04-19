@@ -6,11 +6,16 @@
 </p>
 
 <h1 align="center">JableTV & MissAV Downloader — Material Design 2026</h1>
+<p align="center"><strong>Jable TV 下載器 ｜ MissAV 下載器 ｜ GUI 桌面應用程式</strong></p>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
   繁體中文 ｜ <a href="./README.en.md">English</a>
 </p>
+
+> **Jable.tv 影片下載**、**MissAV 影片下載**的最佳桌面工具。提供完整的圖形介面（GUI），支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓。
+>
+> The best desktop tool for downloading videos from **Jable TV** and **MissAV**. Full GUI with built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — no installation required.
 
 ---
 
@@ -18,22 +23,22 @@
 
 ### JableTV 瀏覽頁面
 <p align="center">
-  <img src="./img/screenshot_browse_jable.png" width="800" alt="JableTV Browse" />
+  <img src="./img/screenshot_browse_jable.png" width="800" alt="Jable TV 下載器 GUI 瀏覽頁面 — JableTV Downloader browse interface" />
 </p>
 
 ### MissAV 瀏覽頁面
 <p align="center">
-  <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV Browse" />
+  <img src="./img/screenshot_browse_missav.png" width="800" alt="MissAV 下載器 GUI 瀏覽頁面 — MissAV Downloader browse interface" />
 </p>
 
 ### 下載管理（即時進度條）
 <p align="center">
-  <img src="./img/screenshot_download.png" width="800" alt="Download Manager" />
+  <img src="./img/screenshot_download.png" width="800" alt="Jable MissAV 批量下載管理 — batch download manager with progress bars" />
 </p>
 
 ### 設定頁面
 <p align="center">
-  <img src="./img/screenshot_settings.png" width="800" alt="Settings" />
+  <img src="./img/screenshot_settings.png" width="800" alt="JableTV MissAV Downloader 設定頁面 — settings page" />
 </p>
 
 ---
@@ -143,6 +148,10 @@ python main.py -nogui True
 ## 作者
 
 **ALOS** — [GitHub](https://github.com/Alos21750)
+
+## 相關搜尋 / Related Keywords
+
+`Jable TV 下載` `JableTV 下載器` `Jable 影片下載` `MissAV 下載` `MissAV 下載器` `Jable download` `MissAV download` `Jable TV downloader GUI` `MissAV downloader` `jable.tv 批量下載` `missav 批量下載` `M3U8 下載器` `HLS 影片下載` `FC2 下載` `中文字幕下載` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool`
 
 ## 授權
 
