@@ -5,17 +5,32 @@
   <img src="https://img.shields.io/badge/Downloads-10_Parallel-00C853?style=for-the-badge" />
 </p>
 
-<h1 align="center">JableTV & MissAV Downloader — Material Design 2026</h1>
-<p align="center"><strong>Jable TV 下載器 ｜ MissAV 下載器 ｜ GUI 桌面應用程式</strong></p>
+<h1 align="center">JableTV Downloader — Jable TV 下載器 & MissAV 下載器</h1>
+<p align="center"><strong>Jable TV Download GUI ｜ MissAV Download GUI ｜ 免費桌面應用</strong></p>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
   繁體中文 ｜ <a href="./README.en.md">English</a>
 </p>
 
-> **Jable.tv 影片下載**、**MissAV 影片下載**的最佳桌面工具。提供完整的圖形介面（GUI），支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓。
+> **Jable.tv 影片下載**、**MissAV 影片下載**最好用的 GUI 桌面工具，不需要命令列。提供完整的圖形介面，支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓、M3U8/HLS 串流下載。
 >
-> The best desktop tool for downloading videos from **Jable TV** and **MissAV**. Full GUI with built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — no installation required.
+> The best **Jable TV downloader** with a full GUI — no CLI needed. Download videos from **Jable TV** and **MissAV** with a built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run.
+
+---
+
+## 為什麼選擇 JableTV Downloader？
+
+| | JableTV Downloader（本工具） | CLI 命令列工具 |
+|--|:---:|:---:|
+| 圖形介面（GUI） | **有** — 瀏覽、搜尋、點選即下載 | 無 — 需要打指令 |
+| 支援 MissAV | **有** | 通常只支援 JableTV |
+| 批量下載 | **多選 + 10 路並行** | 通常一次一個 |
+| 免安裝 | **雙擊 .exe 即用** | 需要安裝 Python 和套件 |
+| 內建瀏覽器 | **有** — 直接在 App 裡看縮圖 | 無 |
+| 進度顯示 | **即時進度條** | 終端文字 |
+| 畫質選擇 | **最高/最低畫質可切換** | 通常只下載最高 |
+| 持續更新 | **活躍開發中** | 大多已停止維護 |
 
 ---
 
@@ -38,7 +53,7 @@
 
 ### 設定頁面
 <p align="center">
-  <img src="./img/screenshot_settings.png" width="800" alt="JableTV MissAV Downloader 設定頁面 — settings page" />
+  <img src="./img/screenshot_settings.png" width="800" alt="JableTV MissAV Downloader 設定頁面 — settings page with resolution selection" />
 </p>
 
 ---
@@ -58,6 +73,7 @@
 - **內建瀏覽器** — 直接在應用程式內瀏覽影片分類、搜尋關鍵字，支援翻頁瀏覽
 - **多選下載** — 在瀏覽頁面勾選多部影片，一鍵送入下載佇列
 - **並行下載（最多 10 路）** — 同時下載最多 10 部影片，可於設定頁調整（預設 2）
+- **畫質選擇** — 可選最高畫質（預設）或最低畫質（省流量模式）
 - **速度限制** — 可設定頻寬限制（1/2/5/10/15 MB/s 或無限制）
 - **即時進度顯示** — 每部影片獨立顯示下載進度、速度、狀態（增量更新，不閃爍）
 - **智慧剪貼簿** — 複製影片網址自動偵測並加入佇列
@@ -66,15 +82,16 @@
 - **自動合併影片** — 下載完成後自動合併 TS 片段為完整 MP4
 - **斷點續傳** — 取消後可重新下載，已完成的片段不會重複下載
 - **高 DPI 支援** — 自動適配高解析度螢幕，介面清晰銳利
-- **設定頁面** — 可調整下載速度、儲存位置、並行數等設定
+- **設定頁面** — 可調整下載速度、儲存位置、並行數、畫質等設定
 - **Windows 免安裝** — 提供打包好的 `.exe` 執行檔，不需安裝 Python
 
 ## 功能特色（Jable_smalltool.exe）
 
 - **一次設定，每日自動** — 選一次儲存資料夾後程式自動每 24 小時檢查一次
-- **鎖定中文字幕** — 只抓 `jable.tv/tags/chinese-subtitle/` 的新片
+- **支援 JableTV + MissAV** — 可同時監控兩個網站多個分類
+- **鎖定中文字幕** — 只抓有中文字幕的新片
 - **去重記憶** — 下載過的影片會記在 `.Jable_smalltool/seen.json`，不會重抓
-- **首次執行回補** — 第一次執行會掃 3 頁補齊近期新片，之後每天只掃 2 頁
+- **智慧基準日期** — 預設只下載昨天之後的新片，不會在首次執行時下載大量影片
 - **可隨時立即檢查** — 不想等 24 小時？點「立即檢查一次」立刻觸發
 - **可背景常駐** — 最小化到工作列即可，不佔用瀏覽器
 
@@ -88,7 +105,7 @@
 
 ## 快速開始
 
-### 🖥️ Windows 使用者（推薦）
+### Windows 使用者（推薦）
 
 前往 **[Releases](../../releases)** 頁面下載：
 
@@ -97,7 +114,7 @@
 
 雙擊即可執行，**不需要安裝 Python**。
 
-### 🐍 macOS / Linux / 其他平台
+### macOS / Linux / 其他平台
 
 ```bash
 # 1. 確認已安裝 Python 3.8+
@@ -121,7 +138,7 @@ python main.py -nogui True
 1. **瀏覽分頁** — 選擇網站與分類，瀏覽影片縮圖，可翻頁、搜尋，勾選後點擊「下載選中」
 2. **下載分頁** — 貼上影片網址或從檔案匯入，點擊「全部下載」
 3. **佇列管理** — 下載中的項目會顯示進度；等候中的項目排隊自動執行
-4. **設定分頁** — 調整速度限制、儲存位置
+4. **設定分頁** — 調整速度限制、儲存位置、畫質偏好
 5. **開啟資料夾** — 點擊「開啟資料夾」按鈕直接查看下載的影片
 6. **取消 / 全部取消** — 可隨時中止下載任務
 
@@ -134,6 +151,19 @@ python main.py -nogui True
 - `ThreadPoolExecutor` 管理並行下載
 - Tkinter 主執行緒安全佇列設計
 - Per-Monitor DPI V2 高解析度支援
+
+---
+
+## 常見問題
+
+**Q: 跟其他 Jable 下載工具有什麼差別？**
+A: 本工具是目前唯一提供完整 GUI 圖形介面的 Jable TV / MissAV 下載器。不需要輸入命令列指令，一般使用者也能輕鬆上手。
+
+**Q: 需要安裝 Python 嗎？**
+A: Windows 使用者不需要。直接下載 `.exe` 雙擊即可執行。macOS/Linux 使用者需要 Python 3.8+。
+
+**Q: 支援 MissAV 嗎？**
+A: 支援。本工具同時支援 JableTV 和 MissAV 兩個網站的瀏覽、搜尋和下載。
 
 ---
 
@@ -151,7 +181,7 @@ python main.py -nogui True
 
 ## 相關搜尋 / Related Keywords
 
-`Jable TV 下載` `JableTV 下載器` `Jable 影片下載` `MissAV 下載` `MissAV 下載器` `Jable download` `MissAV download` `Jable TV downloader GUI` `MissAV downloader` `jable.tv 批量下載` `missav 批量下載` `M3U8 下載器` `HLS 影片下載` `FC2 下載` `中文字幕下載` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool`
+`Jable TV download` `Jable TV 下載` `JableTV downloader` `JableTV 下載器` `Jable TV downloader GUI` `Jable 影片下載` `MissAV download` `MissAV 下載` `MissAV 下載器` `MissAV downloader` `jable.tv 批量下載` `missav 批量下載` `M3U8 下載器` `M3U8 downloader` `HLS 影片下載` `HLS video download` `FC2 download` `FC2 下載` `中文字幕下載` `Chinese subtitle download` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool` `jable downloader GUI free` `missav downloader GUI free`
 
 ## 授權
 

@@ -57,6 +57,16 @@ class _SpeedLimiter:
 
 speed_limiter = _SpeedLimiter()
 
+# ── Resolution preference ──────────────────────────────────────────
+_prefer_lowest_res = False
+
+def set_prefer_lowest_res(value: bool) -> None:
+    global _prefer_lowest_res
+    _prefer_lowest_res = value
+
+def get_prefer_lowest_res() -> bool:
+    return _prefer_lowest_res
+
 
 def _get_session():
     global _session
@@ -182,9 +192,10 @@ class M3U8Crawler:
 
         m3u8obj = m3u8.load(self._m3u8url, headers=self._m3u8_headers())
         if len(m3u8obj.playlists) > 0:
-            # Pick highest quality variant
-            best = max(m3u8obj.playlists,
-                       key=lambda p: p.stream_info.bandwidth if p.stream_info else 0)
+            # Pick variant based on resolution preference
+            selector = min if _prefer_lowest_res else max
+            best = selector(m3u8obj.playlists,
+                            key=lambda p: p.stream_info.bandwidth if p.stream_info else 0)
             m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)

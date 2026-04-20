@@ -115,20 +115,21 @@ class MissAVBrowser:
     """Fetches categories and video listings from missav.ai for the browse GUI."""
     _scraper = None
 
-    # Fixed category list — {lang} placeholder replaced at runtime by fetch_categories()
+    # Fixed category list — no language segment needed for default (Chinese).
+    # For non-default languages (e.g. 'en'), fetch_categories() inserts the prefix.
     CATEGORIES = [
-        ('今日熱門', 'https://missav.ai/dm291/{lang}/today-hot'),
-        ('本週熱門', 'https://missav.ai/dm169/{lang}/weekly-hot'),
-        ('本月熱門', 'https://missav.ai/dm263/{lang}/monthly-hot'),
-        ('中文字幕', 'https://missav.ai/dm265/{lang}/chinese-subtitle'),
-        ('最近更新', 'https://missav.ai/dm515/{lang}/new'),
-        ('新作上市', 'https://missav.ai/dm590/{lang}/release'),
-        ('無碼流出', 'https://missav.ai/dm628/{lang}/uncensored-leak'),
-        ('SIRO', 'https://missav.ai/dm23/{lang}/siro'),
-        ('FC2', 'https://missav.ai/dm150/{lang}/fc2'),
-        ('麻豆傳媒', 'https://missav.ai/dm35/{lang}/madou'),
-        ('東京熱', 'https://missav.ai/dm29/{lang}/tokyohot'),
-        ('一本道', 'https://missav.ai/dm2469695/{lang}/1pondo'),
+        ('今日熱門', 'https://missav.ai/dm291/today-hot'),
+        ('本週熱門', 'https://missav.ai/dm169/weekly-hot'),
+        ('本月熱門', 'https://missav.ai/dm263/monthly-hot'),
+        ('中文字幕', 'https://missav.ai/dm265/chinese-subtitle'),
+        ('最近更新', 'https://missav.ai/dm515/new'),
+        ('新作上市', 'https://missav.ai/dm590/release'),
+        ('無碼流出', 'https://missav.ai/dm628/uncensored-leak'),
+        ('SIRO', 'https://missav.ai/dm23/siro'),
+        ('FC2', 'https://missav.ai/dm150/fc2'),
+        ('麻豆傳媒', 'https://missav.ai/dm35/madou'),
+        ('東京熱', 'https://missav.ai/dm29/tokyohot'),
+        ('一本道', 'https://missav.ai/dm2469695/1pondo'),
     ]
 
     @classmethod
@@ -139,9 +140,18 @@ class MissAVBrowser:
 
     @classmethod
     def fetch_categories(cls, lang='cn'):
-        """Return categories with URLs localized to *lang* (cn, en, ja, …)."""
-        return [{'name': name, 'url': url.format(lang=lang), 'count': 0}
-                for name, url in cls.CATEGORIES]
+        """Return categories with URLs localized to *lang* (cn, en, ja, …).
+
+        MissAV defaults to Chinese, so 'cn' needs no language prefix.
+        Other languages get /{lang}/ inserted after the /dm{N}/ segment.
+        """
+        cats = []
+        for name, url in cls.CATEGORIES:
+            if lang and lang != 'cn':
+                # Insert language prefix: .../dm291/en/today-hot
+                url = re.sub(r'(/dm\d+/)', rf'\1{lang}/', url)
+            cats.append({'name': name, 'url': url, 'count': 0})
+        return cats
 
     @classmethod
     def fetch_page(cls, url):
@@ -193,7 +203,10 @@ class MissAVBrowser:
     @classmethod
     def search(cls, query, lang='cn'):
         """Search for videos matching query."""
-        url = f'https://missav.ai/dm265/{lang}/search?query={query}'
+        if lang and lang != 'cn':
+            url = f'https://missav.ai/dm265/{lang}/search?query={query}'
+        else:
+            url = f'https://missav.ai/dm265/search?query={query}'
         return cls.fetch_page(url)
 
     @classmethod

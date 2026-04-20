@@ -46,8 +46,9 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-DEFAULT_BASELINE_DATE = '2026-04-01'
-DEFAULT_BASELINE_DT = datetime(2026, 4, 1, tzinfo=timezone.utc)
+_yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
+DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
 PER_VIDEO_FETCH_DELAY_SEC = 0.3
 CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
 MAX_SCAN_PAGES = 50
@@ -66,15 +67,15 @@ JABLE_CATEGORIES = [
 ]
 
 MISSAV_CATEGORIES = [
-    ('今日熱門', 'https://missav.ai/dm291/cn/today-hot'),
-    ('本週熱門', 'https://missav.ai/dm169/cn/weekly-hot'),
-    ('本月熱門', 'https://missav.ai/dm263/cn/monthly-hot'),
-    ('中文字幕', 'https://missav.ai/dm265/cn/chinese-subtitle'),
-    ('最近更新', 'https://missav.ai/dm515/cn/new'),
-    ('新作上市', 'https://missav.ai/dm590/cn/release'),
-    ('無碼流出', 'https://missav.ai/dm628/cn/uncensored-leak'),
-    ('FC2', 'https://missav.ai/dm150/cn/fc2'),
-    ('麻豆傳媒', 'https://missav.ai/dm35/cn/madou'),
+    ('今日熱門', 'https://missav.ai/dm291/today-hot'),
+    ('本週熱門', 'https://missav.ai/dm169/weekly-hot'),
+    ('本月熱門', 'https://missav.ai/dm263/monthly-hot'),
+    ('中文字幕', 'https://missav.ai/dm265/chinese-subtitle'),
+    ('最近更新', 'https://missav.ai/dm515/new'),
+    ('新作上市', 'https://missav.ai/dm590/release'),
+    ('無碼流出', 'https://missav.ai/dm628/uncensored-leak'),
+    ('FC2', 'https://missav.ai/dm150/fc2'),
+    ('麻豆傳媒', 'https://missav.ai/dm35/madou'),
 ]
 
 SITES = {

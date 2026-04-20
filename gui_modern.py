@@ -738,6 +738,24 @@ class ModernApp(ctk.CTk):
                      font=('Microsoft JhengHei', 10)).pack(side='left')
         ctk.CTkLabel(grp, text=T('concurrent_desc'),
                      text_color=TEXT_DIM,
+                     font=('Microsoft JhengHei', 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
+
+        # Resolution preference
+        row_res = ctk.CTkFrame(grp, fg_color='transparent')
+        row_res.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(row_res, text=T('resolution_setting'), text_color=TEXT_PRI,
+                     font=('Microsoft JhengHei', 11), width=90,
+                     anchor='w').pack(side='left')
+        self._res_var = ctk.StringVar(value=T('resolution_highest'))
+        ctk.CTkOptionMenu(row_res,
+                          values=[T('resolution_highest'), T('resolution_lowest')],
+                          variable=self._res_var,
+                          command=self._on_res_change, width=180, height=34,
+                          corner_radius=6,
+                          fg_color=BG_INPUT, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOVER).pack(side='left', padx=10)
+        ctk.CTkLabel(grp, text=T('resolution_desc'),
+                     text_color=TEXT_DIM,
                      font=('Microsoft JhengHei', 9)).pack(anchor='w', padx=(110, 0), pady=(0, 20))
 
         # ── About Card ──────────────────────────────────────────────
@@ -1004,7 +1022,10 @@ class ModernApp(ctk.CTk):
             self._current_base_url = f'https://jable.tv/search/?q={q}'
         else:
             lang = T('missav_lang')
-            self._current_base_url = f'https://missav.ai/dm265/{lang}/search?query={q}'
+            if lang and lang != 'cn':
+                self._current_base_url = f'https://missav.ai/dm265/{lang}/search?query={q}'
+            else:
+                self._current_base_url = f'https://missav.ai/dm265/search?query={q}'
         self._page = 1
         self._has_next = True
         self._selected_urls.clear()
@@ -1210,6 +1231,10 @@ class ModernApp(ctk.CTk):
         else:
             mbps = float(val.split()[0])
             speed_limiter.set_limit(mbps)
+
+    def _on_res_change(self, val):
+        from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
+        set_prefer_lowest_res(val == T('resolution_lowest'))
 
     def _on_conc_change(self, val):
         self._dlmgr.max_concurrent = int(val)

@@ -97,6 +97,12 @@ STRINGS = {
         'st_bad_date_msg': '基準日期格式應為 YYYY-MM-DD。',
         'st_started_msg': '背景偵測已啟動 — 你可以將視窗最小化。',
 
+        # Settings — resolution
+        'resolution_setting': '影片畫質',
+        'resolution_desc': '選擇下載影片的解析度偏好（低畫質可省流量、加快下載）',
+        'resolution_highest': '最高畫質',
+        'resolution_lowest': '最低畫質（省流量）',
+
         # MissAV language prefix for URLs
         'missav_lang': 'cn',
     },
@@ -193,6 +199,12 @@ STRINGS = {
         'st_bad_date': 'Invalid Date',
         'st_bad_date_msg': 'Date format should be YYYY-MM-DD.',
         'st_started_msg': 'Monitoring started — you can minimize this window.',
+
+        # Settings — resolution
+        'resolution_setting': 'Video Quality',
+        'resolution_desc': 'Choose download resolution preference (lowest saves bandwidth)',
+        'resolution_highest': 'Highest Quality',
+        'resolution_lowest': 'Lowest Quality (Saving Mode)',
 
         # MissAV language prefix for URLs
         'missav_lang': 'en',
