@@ -183,6 +183,16 @@ A: 支援。本工具同時支援 JableTV 和 MissAV 兩個網站的瀏覽、搜
 
 `Jable TV download` `Jable TV 下載` `JableTV downloader` `JableTV 下載器` `Jable TV downloader GUI` `Jable 影片下載` `MissAV download` `MissAV 下載` `MissAV 下載器` `MissAV downloader` `jable.tv 批量下載` `missav 批量下載` `M3U8 下載器` `M3U8 downloader` `HLS 影片下載` `HLS video download` `FC2 download` `FC2 下載` `中文字幕下載` `Chinese subtitle download` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool` `jable downloader GUI free` `missav downloader GUI free`
 
+## Star History
+
+<a href="https://star-history.com/#Alos21750/JableTV-MissAV-Downloader-GUI-2026&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date" />
+ </picture>
+</a>
+
 ## 授權
 
 [Apache License 2.0](LICENSE)

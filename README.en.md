@@ -186,6 +186,16 @@ Based on [hcjohn463/JableDownload](https://github.com/hcjohn463/JableDownload) a
 
 `Jable TV download` `JableTV downloader` `Jable TV downloader GUI` `Jable video download` `MissAV download` `MissAV downloader` `MissAV downloader GUI` `jable.tv batch download` `missav batch download` `M3U8 downloader` `HLS video download` `FC2 download` `Chinese subtitle download` `AV downloader` `video downloader GUI` `jable tv download tool` `missav download tool` `jable downloader free` `missav downloader free` `jable 下載` `missav 下載器` `jable tv 下載器`
 
+## Star History
+
+<a href="https://star-history.com/#Alos21750/JableTV-MissAV-Downloader-GUI-2026&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Alos21750/JableTV-MissAV-Downloader-GUI-2026&type=Date" />
+ </picture>
+</a>
+
 ## License
 
 [Apache License 2.0](LICENSE)
