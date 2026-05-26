@@ -37,7 +37,7 @@ class SiteMissAV(M3U8Crawler):
     #   https://missav.ai/cn/sone-543-chinese-subtitle
     #   https://missav.ai/sone-543
     # Does NOT match:
-    #   https://missav.ai/dm265/cn/chinese-subtitle  (category listing)
+    #   https://missav.ai/dm278/chinese-subtitle  (category listing)
     website_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-]+)|https://(?:www\.)?missav\.(?:ai|ws)/([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*-\d+[a-zA-Z0-9\-]*)'
     website_dirname_pattern = r'https://(?:www\.)?missav\.(?:ai|ws)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*-\d+[a-zA-Z0-9\-]*)'
 
@@ -118,18 +118,18 @@ class MissAVBrowser:
     # Fixed category list — no language segment needed for default (Chinese).
     # For non-default languages (e.g. 'en'), fetch_categories() inserts the prefix.
     CATEGORIES = [
-        ('今日熱門', 'https://missav.ai/dm291/today-hot'),
-        ('本週熱門', 'https://missav.ai/dm169/weekly-hot'),
-        ('本月熱門', 'https://missav.ai/dm263/monthly-hot'),
-        ('中文字幕', 'https://missav.ai/dm265/chinese-subtitle'),
-        ('最近更新', 'https://missav.ai/dm515/new'),
-        ('新作上市', 'https://missav.ai/dm590/release'),
-        ('無碼流出', 'https://missav.ai/dm628/uncensored-leak'),
-        ('SIRO', 'https://missav.ai/dm23/siro'),
-        ('FC2', 'https://missav.ai/dm150/fc2'),
-        ('麻豆傳媒', 'https://missav.ai/dm35/madou'),
-        ('東京熱', 'https://missav.ai/dm29/tokyohot'),
-        ('一本道', 'https://missav.ai/dm2469695/1pondo'),
+        ('今日熱門', 'https://missav.ai/dm296/today-hot'),
+        ('本週熱門', 'https://missav.ai/dm170/weekly-hot'),
+        ('本月熱門', 'https://missav.ai/dm266/monthly-hot'),
+        ('中文字幕', 'https://missav.ai/dm278/chinese-subtitle'),
+        ('最近更新', 'https://missav.ai/dm539/new'),
+        ('新作上市', 'https://missav.ai/dm632/release'),
+        ('無碼流出', 'https://missav.ai/dm816/uncensored-leak'),
+        ('SIRO', 'https://missav.ai/dm36/siro'),
+        ('FC2', 'https://missav.ai/dm473/fc2'),
+        ('麻豆傳媒', 'https://missav.ai/dm63/madou'),
+        ('東京熱', 'https://missav.ai/dm42/tokyohot'),
+        ('一本道', 'https://missav.ai/dm4286298/1pondo'),
     ]
 
     @classmethod
@@ -148,7 +148,7 @@ class MissAVBrowser:
         cats = []
         for name, url in cls.CATEGORIES:
             if lang and lang != 'cn':
-                # Insert language prefix: .../dm291/en/today-hot
+                # Insert language prefix: .../dm296/en/today-hot
                 url = re.sub(r'(/dm\d+/)', rf'\1{lang}/', url)
             cats.append({'name': name, 'url': url, 'count': 0})
         return cats
@@ -203,10 +203,12 @@ class MissAVBrowser:
     @classmethod
     def search(cls, query, lang='cn'):
         """Search for videos matching query."""
+        from urllib.parse import quote
+        q = quote(query, safe='')
         if lang and lang != 'cn':
-            url = f'https://missav.ai/dm265/{lang}/search?query={query}'
+            url = f'https://missav.ai/{lang}/search/{q}'
         else:
-            url = f'https://missav.ai/dm265/search?query={query}'
+            url = f'https://missav.ai/search/{q}'
         return cls.fetch_page(url)
 
     @classmethod

@@ -229,13 +229,13 @@ if sample_slug:
 
 # ── Test 12: MissAV page_url pagination ───────────────────────────
 print('\n[12] MissAV page_url pagination')
-base = 'https://missav.ai/dm265/cn/new'
+base = 'https://missav.ai/dm539/new'
 _check('page 1 = base', MissAVBrowser.page_url(base, 1) == base)
 _check('page 2 adds ?page=2',
        MissAVBrowser.page_url(base, 2) == f'{base}?page=2')
 _check('page 3 with existing ? uses &',
-       MissAVBrowser.page_url('https://missav.ai/dm265/cn/new?x=1', 3)
-       == 'https://missav.ai/dm265/cn/new?x=1&page=3')
+       MissAVBrowser.page_url('https://missav.ai/dm539/new?x=1', 3)
+       == 'https://missav.ai/dm539/new?x=1&page=3')
 
 
 # ── Test 13: DownloadManager.enqueue + cancel_all (no real DL) ────

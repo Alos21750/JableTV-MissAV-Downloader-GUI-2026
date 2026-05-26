@@ -545,7 +545,8 @@ class BrowsePanel(tk.Frame):
         if self._site_key == 'JableTV':
             self._current_base_url = f'https://jable.tv/search/?q={q}'
         else:
-            self._current_base_url = f'https://missav.ai/dm265/cn/search?query={q}'
+            from urllib.parse import quote
+            self._current_base_url = f'https://missav.ai/search/{quote(q, safe="")}'
         self._page = 1
         self._has_next = True
         self._selected_urls.clear()

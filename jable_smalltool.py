@@ -67,15 +67,15 @@ JABLE_CATEGORIES = [
 ]
 
 MISSAV_CATEGORIES = [
-    ('今日熱門', 'https://missav.ai/dm291/today-hot'),
-    ('本週熱門', 'https://missav.ai/dm169/weekly-hot'),
-    ('本月熱門', 'https://missav.ai/dm263/monthly-hot'),
-    ('中文字幕', 'https://missav.ai/dm265/chinese-subtitle'),
-    ('最近更新', 'https://missav.ai/dm515/new'),
-    ('新作上市', 'https://missav.ai/dm590/release'),
-    ('無碼流出', 'https://missav.ai/dm628/uncensored-leak'),
-    ('FC2', 'https://missav.ai/dm150/fc2'),
-    ('麻豆傳媒', 'https://missav.ai/dm35/madou'),
+    ('今日熱門', 'https://missav.ai/dm296/today-hot'),
+    ('本週熱門', 'https://missav.ai/dm170/weekly-hot'),
+    ('本月熱門', 'https://missav.ai/dm266/monthly-hot'),
+    ('中文字幕', 'https://missav.ai/dm278/chinese-subtitle'),
+    ('最近更新', 'https://missav.ai/dm539/new'),
+    ('新作上市', 'https://missav.ai/dm632/release'),
+    ('無碼流出', 'https://missav.ai/dm816/uncensored-leak'),
+    ('FC2', 'https://missav.ai/dm473/fc2'),
+    ('麻豆傳媒', 'https://missav.ai/dm63/madou'),
 ]
 
 SITES = {
@@ -566,7 +566,7 @@ class SmallToolWorker:
 class SmallToolApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f'{APP_NAME} v2.2.0 — 多站自動下載工具 — by ALOS')
+        self.title(f'{APP_NAME} v2.2.1 — 多站自動下載工具 — by ALOS')
         self.geometry('860x680')
         self.minsize(700, 550)
         self.configure(bg=BG_DARK)
@@ -623,7 +623,7 @@ class SmallToolApp(tk.Tk):
         tk.Label(hdr, text='多站自動下載',
                  bg=BG_HEADER, fg=TEXT_SEC,
                  font=('Microsoft JhengHei', 11)).pack(side='left', padx=(0, 8))
-        tk.Label(hdr, text='v2.2.0  |  by ALOS',
+        tk.Label(hdr, text='v2.2.1  |  by ALOS',
                  bg=BG_HEADER, fg=TEXT_DIM,
                  font=('Microsoft JhengHei', 10)).pack(side='right', padx=14)
 
@@ -661,6 +661,26 @@ class SmallToolApp(tk.Tk):
         tk.Label(date_frame, text='(YYYY-MM-DD，只下載此日期之後的影片)',
                  bg=BG_DARK, fg=TEXT_DIM,
                  font=('Microsoft JhengHei', 9)).pack(side='left')
+
+        # Resolution row
+        res_frame = tk.Frame(self, bg=BG_DARK)
+        res_frame.pack(fill='x', padx=14, pady=(0, 6))
+        tk.Label(res_frame, text='影片畫質:', bg=BG_DARK, fg=TEXT_SEC,
+                 font=('Microsoft JhengHei', 10)).pack(side='left')
+        self._res_var = tk.StringVar(value='最低畫質（省流量）' if self._cfg.get('prefer_lowest_res', False) else '最高畫質')
+        res_menu = tk.OptionMenu(res_frame, self._res_var, '最高畫質', '最低畫質（省流量）',
+                                 command=self._on_res_change)
+        res_menu.configure(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
+                           activeforeground=TEXT_PRI, relief='flat', bd=4,
+                           font=('Microsoft JhengHei', 10), highlightthickness=0)
+        res_menu['menu'].configure(bg=BG_INPUT, fg=TEXT_PRI,
+                                   activebackground=ACCENT, activeforeground='#ffffff',
+                                   font=('Microsoft JhengHei', 10))
+        res_menu.pack(side='left', padx=8)
+        # Apply saved preference immediately (before auto-start)
+        if self._cfg.get('prefer_lowest_res', False):
+            from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
+            set_prefer_lowest_res(True)
 
         # ── Site / Category selection ───────────────────────────────
         sel_label = tk.Label(self, text='選擇網站與分類（可多選）:',
@@ -832,6 +852,13 @@ class SmallToolApp(tk.Tk):
             self._cfg['output_folder'] = d
             save_config(self._cfg)
             self._log(f'儲存位置已設為 {d}')
+
+    def _on_res_change(self, val):
+        from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
+        prefer_low = (val == '最低畫質（省流量）')
+        set_prefer_lowest_res(prefer_low)
+        self._cfg['prefer_lowest_res'] = prefer_low
+        save_config(self._cfg)
 
     def _start_worker(self):
         folder = self._folder_var.get().strip()
