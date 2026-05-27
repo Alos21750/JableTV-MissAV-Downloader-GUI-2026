@@ -3,6 +3,11 @@
 
 import re
 import cloudscraper
+try:
+    from curl_cffi import requests as cffi_requests
+    _use_cffi = True
+except ImportError:
+    _use_cffi = False
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
 
@@ -48,8 +53,11 @@ class SiteMissAV(M3U8Crawler):
     def _get_scraper(cls):
         with cls._scraper_lock:
             if cls._shared_scraper is None:
-                cls._shared_scraper = cloudscraper.create_scraper(
-                    browser=request_headers, delay=10)
+                if _use_cffi:
+                    cls._shared_scraper = cffi_requests.Session(impersonate='chrome')
+                else:
+                    cls._shared_scraper = cloudscraper.create_scraper(
+                        browser=request_headers, delay=10)
             return cls._shared_scraper
 
     def get_url_infos(self):
@@ -135,7 +143,10 @@ class MissAVBrowser:
     @classmethod
     def _get_scraper(cls):
         if cls._scraper is None:
-            cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
+            if _use_cffi:
+                cls._scraper = cffi_requests.Session(impersonate='chrome')
+            else:
+                cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
         return cls._scraper
 
     @classmethod
@@ -159,6 +170,8 @@ class MissAVBrowser:
         try:
             r = cls._get_scraper().get(url, timeout=30)
             if r.status_code != 200:
+                import sys
+                print(f'[MissAV] fetch_page {url}: HTTP {r.status_code}', file=sys.stderr, flush=True)
                 return []
             soup = BeautifulSoup(r.content, 'html.parser')
             cards = soup.select('div.thumbnail')
@@ -171,11 +184,11 @@ class MissAVBrowser:
                 if not link:
                     continue
                 video_url = link.get('href', '')
-                # Normalize: ensure it's a video page URL (contains /<lang>/<slug>)
-                if not re.search(r'/[a-z]{2}/[a-z]', video_url):
-                    # Also accept bare video slugs like /sone-543
-                    if not re.search(r'/[a-zA-Z][a-zA-Z0-9]*-\d+', video_url):
-                        continue
+                if '/search/' in video_url:
+                    continue
+                last_seg = video_url.rstrip('/').rsplit('/', 1)[-1].split('?')[0]
+                if not re.search(r'\d', last_seg):
+                    continue
 
                 img = card.select_one('img')
                 thumbnail = img.get('data-src', '') or (img.get('src', '') if img else '')

@@ -5,11 +5,11 @@ datas = []
 binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
-    'customtkinter',
+    'customtkinter', 'curl_cffi', '_cffi_backend',
 ]
 
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
-for pkg in ['cloudscraper', 'certifi', 'customtkinter']:
+for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 

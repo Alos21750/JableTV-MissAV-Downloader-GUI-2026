@@ -5,9 +5,10 @@ datas = []
 binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
+    'curl_cffi', '_cffi_backend',
 ]
 
-for pkg in ['cloudscraper', 'certifi']:
+for pkg in ['cloudscraper', 'certifi', 'curl_cffi']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
