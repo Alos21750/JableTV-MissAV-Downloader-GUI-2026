@@ -5,11 +5,12 @@ datas = []
 binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
+    'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
     'customtkinter', 'curl_cffi', '_cffi_backend',
 ]
 
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
-for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi']:
+for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi', 'imageio_ffmpeg']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
@@ -23,7 +24,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['imageio_ffmpeg', 'imageio'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
