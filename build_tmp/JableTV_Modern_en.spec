@@ -1,20 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 datas = []
 binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
-    'curl_cffi', '_cffi_backend',
+    'customtkinter', 'curl_cffi', '_cffi_backend',
 ]
 
-for pkg in ['cloudscraper', 'certifi', 'curl_cffi']:
+for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
 
 a = Analysis(
-    ['..\\jable_smalltool.py'],
+    ['..\\main_en.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -34,7 +34,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Jable_smalltool',
+    name='JableTV_Modern_en',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -47,5 +47,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='Jable_smalltool.version',
+    version='JableTV_Modern.version',
 )

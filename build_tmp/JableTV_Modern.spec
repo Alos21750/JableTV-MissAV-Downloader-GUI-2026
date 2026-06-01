@@ -23,7 +23,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['imageio_ffmpeg', 'imageio'],
     noarchive=False,
     optimize=0,
 )

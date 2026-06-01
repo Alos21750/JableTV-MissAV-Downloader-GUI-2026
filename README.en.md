@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
   <img src="https://img.shields.io/badge/License-Apache_2.0-D22128?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Downloads-10_Parallel-00C853?style=for-the-badge" />
+  <img src="https://img.shields.io/github/downloads/Alos21750/JableTV-MissAV-Downloader-GUI-2026/total?style=for-the-badge&color=00C853&label=Downloads&logo=github&logoColor=white" />
 </p>
 
 <h1 align="center">JableTV Downloader — GUI Video Downloader for Jable TV & MissAV</h1>

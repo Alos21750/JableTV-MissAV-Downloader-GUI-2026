@@ -14,7 +14,7 @@ for pkg in ['cloudscraper', 'certifi', 'curl_cffi']:
 
 
 a = Analysis(
-    ['..\\jable_smalltool.py'],
+    ['..\\jable_smalltool_en.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -34,7 +34,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Jable_smalltool',
+    name='Jable_smalltool_en',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

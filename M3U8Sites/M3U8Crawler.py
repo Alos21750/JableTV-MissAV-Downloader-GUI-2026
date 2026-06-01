@@ -13,6 +13,11 @@ from config import headers
 import concurrent.futures
 import copy
 import time
+import subprocess
+import shutil
+import tempfile
+import ctypes
+import sys
 
 request_headers = {'browser': 'firefox', 'platform': platform.system().lower()}
 default_max_workers = min(os.cpu_count() * 2, 16) if os.cpu_count() else 8
@@ -56,6 +61,80 @@ class _SpeedLimiter:
                 time.sleep(0.05)
 
 speed_limiter = _SpeedLimiter()
+
+_FFMPEG_PATH = None
+_FFMPEG_RESOLVED = False
+
+def _no_window_kwargs():
+    if os.name == 'nt':
+        return {'creationflags': 0x08000000}  # CREATE_NO_WINDOW
+    return {}
+
+def _ffmpeg_works(path):
+    try:
+        r = subprocess.run([path, '-version'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=10, **_no_window_kwargs())
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def _companion_ffmpeg():
+    """Look for ffmpeg shipped next to the app (frozen exe folder / _MEIPASS / script dir)."""
+    dirs = []
+    if getattr(sys, 'frozen', False):
+        dirs.append(os.path.dirname(sys.executable))
+        mp = getattr(sys, '_MEIPASS', None)
+        if mp:
+            dirs.append(mp)
+    else:
+        dirs.append(os.path.dirname(os.path.abspath(__file__)))
+        dirs.append(os.getcwd())
+    names = ('ffmpeg.exe', 'ffmpeg') if os.name == 'nt' else ('ffmpeg',)
+    for d in dirs:
+        for nm in names:
+            p = os.path.join(d, nm)
+            if os.path.isfile(p):
+                return p
+    return None
+
+def locate_ffmpeg():
+    global _FFMPEG_PATH, _FFMPEG_RESOLVED
+    if _FFMPEG_RESOLVED:
+        return _FFMPEG_PATH
+    def candidates():
+        c = _companion_ffmpeg()
+        if c:
+            yield c
+        w = shutil.which('ffmpeg')
+        if w:
+            yield w
+        try:
+            import imageio_ffmpeg
+            yield imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return
+    chosen = None
+    for c in candidates():
+        if c and _ffmpeg_works(c):
+            chosen = c
+            break
+    _FFMPEG_PATH = chosen
+    _FFMPEG_RESOLVED = True
+    return chosen
+
+def _ffmpeg_safe_dir(path):
+    """Return an ffmpeg-friendly (ASCII if possible) form of an EXISTING dir path."""
+    if os.name != 'nt' or path.isascii():
+        return path
+    try:
+        GetShort = ctypes.windll.kernel32.GetShortPathNameW
+        buf = ctypes.create_unicode_buffer(600)
+        n = GetShort(path, buf, 600)
+        if n and n < 600 and buf.value:
+            return buf.value
+    except Exception:
+        pass
+    return path
 
 # ── Resolution preference ──────────────────────────────────────────
 _prefer_lowest_res = False
@@ -106,6 +185,7 @@ class M3U8Crawler:
         self._t_future = None
         self._t2_executor = None
         self._cancel_job = None
+        self._ffmpeg_proc = None
         self._extra_headers = {}   # subclass may set (e.g. Referer)
         self._dirName = None
         self._dest_folder = None
@@ -243,29 +323,86 @@ class M3U8Crawler:
                 try: os.remove(saveName)
                 except OSError: pass
 
+    def _cancellable_move(self, src, dst):
+        """Move src->dst honoring cancel. Fast same-volume rename, else chunked copy."""
+        try:
+            os.replace(src, dst)   # same volume: instant + atomic
+            return True
+        except OSError:
+            pass
+        try:
+            with open(src, 'rb') as fi, open(dst, 'wb') as fo:
+                while True:
+                    if self._cancel_job:
+                        break
+                    buf = fi.read(4 * 1024 * 1024)
+                    if not buf:
+                        try: os.remove(src)
+                        except OSError: pass
+                        return True
+                    fo.write(buf)
+            try: os.remove(dst)      # cancelled mid-copy
+            except OSError: pass
+            return False
+        except Exception:
+            return False
+
     def _mergeMp4Chunks(self):
         start_time = time.time()
         saveName = self._get_video_savename()
-        number_of_chunk = len(self._tsList)
-        print(f'開始合成影片...共有 {number_of_chunk} 個片段', flush=True)
-        # Remove stale output file
-        if os.path.exists(saveName):
-            os.remove(saveName)
-        for i, ts_url in enumerate(self._tsList):
-            file = ts_url.split('/')[-1].rsplit('.', 1)[0] + '.mp4'
-            full_path = os.path.join(self._temp_folder, file)
-            if os.path.exists(full_path) and not self._cancel_job:
-                with open(full_path, 'rb') as f1:
-                    with open(saveName, 'ab') as f2:
-                        f2.write(f1.read())
-                number_of_chunk -= 1
-                print(f'\r合成影片中, 剩餘 {number_of_chunk} 個片段', end="")
-            else:
-                if os.path.exists(saveName):
-                    os.remove(saveName)
-                if not self._cancel_job:
-                    print(f"\n{file} 片段遺失, 合成失敗!!!", flush=True)
+        part = saveName + '.part'
+        for p in (saveName, part):
+            if os.path.exists(p):
+                try: os.remove(p)
+                except OSError: pass
+        n = len(self._tsList)
+        print(f'開始合成影片...共有 {n} 個片段', flush=True)
+
+        workdir = tempfile.mkdtemp(prefix='jbremux_')   # local, per-user temp
+        merged = os.path.join(workdir, 'merged.ts')
+        out_mp4 = os.path.join(workdir, 'out.mp4')
+        published = False
+        try:
+            remaining = n
+            with open(merged, 'wb') as out:
+                for ts_url in self._tsList:
+                    if self._cancel_job:
+                        return 0
+                    seg_name = ts_url.split('/')[-1].rsplit('.', 1)[0] + '.mp4'
+                    seg = os.path.join(self._temp_folder, seg_name)
+                    if not os.path.exists(seg):
+                        if not self._cancel_job:
+                            print(f"\n{seg_name} 片段遺失, 合成失敗!!!", flush=True)
+                        return 0
+                    with open(seg, 'rb') as f:
+                        shutil.copyfileobj(f, out, 1024 * 1024)
+                    remaining -= 1
+                    print(f'\r合成影片中, 剩餘 {remaining} 個片段', end="")
+            print()
+            if self._cancel_job:
                 return 0
+
+            ok = self._remux_to_mp4(merged, out_mp4, workdir)
+            if self._cancel_job:
+                return 0
+            if ok:
+                moved = self._cancellable_move(out_mp4, part)
+            else:
+                print('[合成] ffmpeg 無法使用或重新封裝失敗，改用原始合併（檔案可播放，但部分播放器/NAS 拖曳進度可能異常）', flush=True)
+                moved = self._cancellable_move(merged, part)
+            if self._cancel_job or not moved:
+                if os.path.exists(part):
+                    try: os.remove(part)
+                    except OSError: pass
+                return 0
+            os.replace(part, saveName)
+            published = True
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+            if not published and os.path.exists(part):
+                try: os.remove(part)
+                except OSError: pass
+
         spent_time = time.time() - start_time
         print(f'\n合成完成，花費 {spent_time:.1f} 秒', flush=True)
         self._deleteMp4Chunks()
@@ -273,6 +410,51 @@ class M3U8Crawler:
             try: os.removedirs(self._temp_folder)
             except OSError: pass
         return spent_time
+
+    def _remux_to_mp4(self, merged_ts, out_mp4, workdir):
+        ffmpeg = locate_ffmpeg()
+        if not ffmpeg:
+            print('[合成] 找不到 ffmpeg，略過重新封裝', flush=True)
+            return False
+        ff_dir = _ffmpeg_safe_dir(workdir)
+        in_arg = os.path.join(ff_dir, os.path.basename(merged_ts))
+        out_arg = os.path.join(ff_dir, os.path.basename(out_mp4))
+        log_path = os.path.join(workdir, 'ffmpeg.log')
+        cmd = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+               '-fflags', '+genpts', '-i', in_arg,
+               '-c', 'copy', '-movflags', '+faststart',
+               '-avoid_negative_ts', 'make_zero', out_arg]
+        print('正在重新封裝為可正常拖曳的 MP4 ...', flush=True)
+        try:
+            with open(log_path, 'wb') as errf:
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.DEVNULL, stderr=errf,
+                                        **_no_window_kwargs())
+                self._ffmpeg_proc = proc
+                try:
+                    while True:
+                        try:
+                            proc.wait(timeout=0.3); break
+                        except subprocess.TimeoutExpired:
+                            if self._cancel_job:
+                                proc.kill(); proc.wait(); return False
+                finally:
+                    self._ffmpeg_proc = None
+        except Exception as e:
+            print(f'[合成] ffmpeg 執行錯誤: {e}', flush=True)
+            return False
+        if self._cancel_job:
+            return False
+        if proc.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+            return True
+        tail = ''
+        try:
+            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                tail = f.read()[-800:]
+        except Exception:
+            pass
+        print(f'[合成] ffmpeg 重新封裝失敗 rc={proc.returncode}: {tail}', flush=True)
+        return False
 
     def _scrape(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
@@ -396,6 +578,10 @@ class M3U8Crawler:
             try: self._t_executor.shutdown(wait=False, cancel_futures=True)
             except TypeError: self._t_executor.shutdown(wait=False)
             self._t_executor = None
+        proc = getattr(self, '_ffmpeg_proc', None)
+        if proc is not None:
+            try: proc.kill()
+            except Exception: pass
         print("\n下載已取消", flush=True)
 
     def begin_concurrent_download(self):
