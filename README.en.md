@@ -107,12 +107,26 @@ This project ships two independent executables:
 
 ### Windows Users (Recommended)
 
-Go to **[Releases](../../releases)** and download:
+Go to **[Releases](../../releases)** and download (each ~58 MB, **ffmpeg bundled — single file, just double-click**):
 
-- **JableTV_Modern.exe** — Full downloader (~27 MB)
-- **Jable_smalltool.exe** — Daily auto-downloader (~21 MB)
+- **JableTV_Modern.exe** — Full downloader (browse / search / multi-select / parallel)
+- **Jable_smalltool.exe** — Daily auto-downloader (set the folder once, leave it running)
+- English UI: **JableTV_Modern_en.exe** / **Jable_smalltool_en.exe**
 
-Double-click to run — **no Python installation needed**.
+Double-click to run — **no Python and no separate ffmpeg install needed**.
+
+#### 🌏 Faster / mirrored download (when GitHub is slow or blocked)
+
+If the GitHub Release download is slow or fails (e.g. in mainland China), prefix the download URL with a mirror — **these links always point to the latest release**:
+
+| File | Accelerated link |
+|---|---|
+| JableTV_Modern.exe | **[gh-proxy mirror](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/JableTV_Modern.exe)** |
+| Jable_smalltool.exe | **[gh-proxy mirror](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/Jable_smalltool.exe)** |
+| JableTV_Modern_en.exe | **[gh-proxy mirror](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/JableTV_Modern_en.exe)** |
+| Jable_smalltool_en.exe | **[gh-proxy mirror](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/Jable_smalltool_en.exe)** |
+
+> 💡 If `gh-proxy.com` is down, swap the `https://gh-proxy.com/` prefix for `https://gh-proxy.org/` or `https://ghfast.top/`.
 
 ### macOS / Linux / Other Platforms
 

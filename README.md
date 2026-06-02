@@ -107,12 +107,26 @@
 
 ### Windows 使用者（推薦）
 
-前往 **[Releases](../../releases)** 頁面下載：
+前往 **[Releases](../../releases)** 頁面下載（每個約 58 MB，**已內建 ffmpeg，單檔雙擊即用**）：
 
-- **JableTV_Modern.exe** — 完整下載器（約 27 MB）
-- **Jable_smalltool.exe** — 中文字幕每日自動下載小工具（約 21 MB）
+- **JableTV_Modern.exe** — 完整下載器（瀏覽 / 搜尋 / 多選 / 並行下載）
+- **Jable_smalltool.exe** — 每日自動下載小工具（設定一次資料夾即可掛機）
+- 介面英文版：**JableTV_Modern_en.exe** / **Jable_smalltool_en.exe**
 
-雙擊即可執行，**不需要安裝 Python**。
+雙擊即可執行，**不需要安裝 Python，也不需要另外安裝 ffmpeg**。
+
+#### 🇨🇳 國內加速下載（GitHub 下載慢 / 失敗時）
+
+GitHub Release 在中國大陸常常很慢或中斷。把下載網址前面加上鏡像前綴即可加速，**以下連結永遠指向最新版本**：
+
+| 檔案 | 加速下載 |
+|---|---|
+| JableTV_Modern.exe | **[gh-proxy 加速下載](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/JableTV_Modern.exe)** |
+| Jable_smalltool.exe | **[gh-proxy 加速下載](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/Jable_smalltool.exe)** |
+| JableTV_Modern_en.exe | **[gh-proxy 加速下載](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/JableTV_Modern_en.exe)** |
+| Jable_smalltool_en.exe | **[gh-proxy 加速下載](https://gh-proxy.com/https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest/download/Jable_smalltool_en.exe)** |
+
+> 💡 若 `gh-proxy.com` 連不上，把網址最前面的 `https://gh-proxy.com/` 換成 `https://gh-proxy.org/` 或 `https://ghfast.top/`（用法完全一樣）。真的都不行就直接開 [Releases](../../releases) 頁面下載。
 
 ### macOS / Linux / 其他平台
 
