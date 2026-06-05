@@ -566,7 +566,7 @@ class SmallToolWorker:
 class SmallToolApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f'{APP_NAME} v2.3.0 — 多站自動下載工具 — by ALOS')
+        self.title(f'{APP_NAME} v2.3.1 — 多站自動下載工具 — by ALOS')
         self.geometry('860x680')
         self.minsize(700, 550)
         self.configure(bg=BG_DARK)
@@ -623,7 +623,7 @@ class SmallToolApp(tk.Tk):
         tk.Label(hdr, text='多站自動下載',
                  bg=BG_HEADER, fg=TEXT_SEC,
                  font=('Microsoft JhengHei', 11)).pack(side='left', padx=(0, 8))
-        tk.Label(hdr, text='v2.3.0  |  by ALOS',
+        tk.Label(hdr, text='v2.3.1  |  by ALOS',
                  bg=BG_HEADER, fg=TEXT_DIM,
                  font=('Microsoft JhengHei', 10)).pack(side='right', padx=14)
 

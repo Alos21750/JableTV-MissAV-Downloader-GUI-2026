@@ -3,8 +3,24 @@
 
 import re
 import cloudscraper
+try:
+    from curl_cffi import requests as cffi_requests
+    _use_cffi = True
+except ImportError:
+    _use_cffi = False
+import threading as _threading
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+
+
+_browser_scraper = None
+_browser_scraper_lock = _threading.Lock()
+
+def _make_scraper():
+    """Fresh scraper: curl_cffi (Cloudflare-capable) if available, else cloudscraper."""
+    if _use_cffi:
+        return cffi_requests.Session(impersonate='chrome')
+    return cloudscraper.create_scraper(browser=request_headers, delay=10)
 
 
 class SiteJableTV(M3U8Crawler):
@@ -12,15 +28,19 @@ class SiteJableTV(M3U8Crawler):
     website_dirname_pattern = r'https://jable\.tv/videos/(.+)/$'
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        with _make_scraper() as scraper:
+            htmlfile = scraper.get(self._url, timeout=30)
         if htmlfile.status_code != 200:
-            raise Exception(f"Bad url names: {self._url}")
-        result = re.search('og:title".+/>', htmlfile.text)
-        self._targetName = result[0].split('"')[-2]
-        result = re.search('og:image".+jpg"', htmlfile.text)
-        self._imageUrl = result[0].split('"')[-2]
-        result = re.search("https://.+m3u8", htmlfile.text)
-        self._m3u8url = result[0]
+            raise Exception(f"HTTP {htmlfile.status_code} for {self._url}")
+        text = htmlfile.text
+        title = re.search('og:title".+/>', text)
+        image = re.search('og:image".+jpg"', text)
+        m3u8 = re.search("https://.+m3u8", text)
+        if not (title and image and m3u8):
+            raise Exception(f"頁面解析失敗（可能被 Cloudflare 阻擋或版面改版）: {self._url}")
+        self._targetName = title[0].split('"')[-2]
+        self._imageUrl = image[0].split('"')[-2]
+        self._m3u8url = m3u8[0]
 
 
 class SiteJableTV_Backup(SiteJableTV):
@@ -76,7 +96,8 @@ class JableTVList(SiteUrlList_M3U8):
     def _url_get(self, url):
         divlist = None
         try:
-            htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(url)
+            with _make_scraper() as _scr:
+                htmlfile = _scr.get(url, timeout=30)
             if htmlfile.status_code == 200:
                 content = htmlfile.content
                 soup = BeautifulSoup(content, 'html.parser')
@@ -128,12 +149,12 @@ class JableTVList(SiteUrlList_M3U8):
             if self.searchKeyWord is None:
                 newUrl = self.url + f"?from={index+1}"
             else:
-                newUrl = f"{self._url_root}/search/?q={self.searchKeyWord}&from_videos={index+1}"
+                newUrl = f"{self._url_root}/search/?q={self.searchKeyWord}&from={index+1}"
         else:
             if self.searchKeyWord is None:
                 newUrl = self.url + f"?sort_by={JableTVList._sortby_dict[sortby]}&from={index+1}"
             else:
-                newUrl = f"{self._url_root}/search/?q={self.searchKeyWord}&sort_by={JableTVList._sortby_dict[sortby]}&from_videos={index+1}"
+                newUrl = f"{self._url_root}/search/?q={self.searchKeyWord}&sort_by={JableTVList._sortby_dict[sortby]}&from={index+1}"
         self._url_get(newUrl)
         self.currentPage = index
         self.sortType = sortby
@@ -239,9 +260,13 @@ class JableTVBrowser:
 
     @classmethod
     def _get_scraper(cls):
-        if cls._scraper is None:
-            cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
-        return cls._scraper
+        global _browser_scraper
+        if _browser_scraper is None:
+            with _browser_scraper_lock:
+                if _browser_scraper is None:
+                    _browser_scraper = _make_scraper()
+        cls._scraper = _browser_scraper
+        return _browser_scraper
 
     @classmethod
     def tag_url(cls, slug):
@@ -275,7 +300,10 @@ class JableTVBrowser:
     def fetch_page(cls, url):
         try:
             r = cls._get_scraper().get(url, timeout=30)
-            if r.status_code != 200: return []
+            if r.status_code != 200:
+                import sys
+                print(f'[JableTV] fetch_page {url}: HTTP {r.status_code} (可能 Cloudflare 阻擋)', file=sys.stderr, flush=True)
+                return []
             soup = BeautifulSoup(r.content, 'html.parser')
             divlist = soup.find('div', id=lambda x: x and x.startswith('list_videos'))
             if divlist is None: return []

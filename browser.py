@@ -542,10 +542,10 @@ class BrowsePanel(tk.Frame):
         q = self._q_var.get().strip()
         if not q:
             return
+        from urllib.parse import quote
         if self._site_key == 'JableTV':
-            self._current_base_url = f'https://jable.tv/search/?q={q}'
+            self._current_base_url = f'https://jable.tv/search/?q={quote(q, safe="")}'
         else:
-            from urllib.parse import quote
             self._current_base_url = f'https://missav.ai/search/{quote(q, safe="")}'
         self._page = 1
         self._has_next = True
@@ -597,8 +597,8 @@ class BrowsePanel(tk.Frame):
         if self._site_key == 'JableTV':
             base = self._current_base_url
             if '?' in base:
-                # Search URL: ?q=xxx — uses from_videos for pagination
-                return f'{base}&from_videos={self._page}'
+                # Search URL: ?q=xxx — uses from for pagination
+                return f'{base}&from={self._page}'
             # Category URL — uses ?from=N
             base = base.rstrip('/')
             return f'{base}/?from={self._page}'

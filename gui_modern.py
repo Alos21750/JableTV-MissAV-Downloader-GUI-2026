@@ -373,7 +373,7 @@ class ModernApp(ctk.CTk):
                      text_color=ACCENT).pack(side='left', padx=(8, 0))
 
         # Right info
-        ctk.CTkLabel(header, text='v2.3.0  |  by ALOS',
+        ctk.CTkLabel(header, text='v2.3.1  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right', padx=20)
 
@@ -784,7 +784,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.3.0',
+        ctk.CTkLabel(ver_badge, text='v2.3.1',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -819,7 +819,7 @@ class ModernApp(ctk.CTk):
         base = self._current_base_url
         if self._site_key == 'JableTV':
             if '?' in base:
-                url = f'{base}&from_videos={self._page}'
+                url = f'{base}&from={self._page}'
             else:
                 url = f'{base.rstrip("/")}/?from={self._page}'
         else:
@@ -1018,10 +1018,10 @@ class ModernApp(ctk.CTk):
         q = self._search_var.get().strip()
         if not q:
             return
+        from urllib.parse import quote
         if self._site_key == 'JableTV':
-            self._current_base_url = f'https://jable.tv/search/?q={q}'
+            self._current_base_url = f'https://jable.tv/search/?q={quote(q, safe="")}'
         else:
-            from urllib.parse import quote
             lang = T('missav_lang')
             eq = quote(q, safe='')
             if lang and lang != 'cn':
@@ -1157,7 +1157,7 @@ class ModernApp(ctk.CTk):
                     if page == 1:
                         page_url = url
                     elif '?' in url:
-                        page_url = f'{url}&from_videos={page}'
+                        page_url = f'{url}&from={page}'
                     else:
                         page_url = f'{url.rstrip("/")}/?from={page}'
                     videos = JableTVBrowser.fetch_page(page_url)

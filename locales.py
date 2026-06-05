@@ -7,7 +7,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV & MissAV',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.3.0',
+        'version_label': 'v2.3.1',
         'by_author': 'by ALOS',
 
         # Tabs
@@ -110,7 +110,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV & MissAV',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.3.0',
+        'version_label': 'v2.3.1',
         'by_author': 'by ALOS',
 
         # Tabs
