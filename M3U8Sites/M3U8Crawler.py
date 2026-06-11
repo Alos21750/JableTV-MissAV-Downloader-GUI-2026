@@ -19,7 +19,7 @@ import shutil
 import tempfile
 import ctypes
 import sys
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, urljoin
 
 
 class MirrorsBlockedError(Exception):
@@ -300,6 +300,9 @@ class M3U8Crawler:
     def target_name(self): return self._targetName
     def dest_folder(self): return self._dest_folder
     def is_url_vaildate(self): return True if self._m3u8url else False
+    def _transform_segment(self, data):
+        """Hook: transform raw segment bytes before AES/write. Default identity; sites may override."""
+        return data
 
     def _create_temp_folder(self):
         if not os.path.exists(self._temp_folder):
@@ -330,13 +333,15 @@ class M3U8Crawler:
         return {**headers, **self._extra_headers}
 
     def _getm3u8PlayList(self, uri):
-        m3u8urlPath = self._m3u8url.split('/')
-        if uri.startswith('/'): m3u8urlPath = m3u8urlPath[:3]
-        else: m3u8urlPath.pop(-1)
-        baseurl = '/'.join(m3u8urlPath)
-        playListUrl = baseurl + '/' + uri.lstrip('/')
+        if uri.startswith(('http://', 'https://', '//')):
+            playListUrl = urljoin(self._m3u8url, uri)
+        else:
+            m3u8urlPath = self._m3u8url.split('/')
+            if uri.startswith('/'): m3u8urlPath = m3u8urlPath[:3]
+            else: m3u8urlPath.pop(-1)
+            baseurl = '/'.join(m3u8urlPath)
+            playListUrl = baseurl + '/' + uri.lstrip('/')
         m3u8obj = m3u8.load(playListUrl, headers=self._m3u8_headers())
-        # Segments are relative to the variant playlist, not the master
         variantBase = playListUrl.rsplit('/', 1)[0] + '/'
         return m3u8obj, variantBase
 
@@ -548,6 +553,7 @@ class M3U8Crawler:
             if response.status_code != 200:
                 return False
             content_ts = response.content
+            content_ts = self._transform_segment(content_ts)
             speed_limiter.acquire(len(content_ts))
             if self._key_content:
                 cipher = self._make_cipher(seq_num)

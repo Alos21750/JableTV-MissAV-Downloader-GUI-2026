@@ -5,11 +5,13 @@ import M3U8Sites.SiteJableTV
 import M3U8Sites.Site91Porn
 import M3U8Sites.SiteJavDB
 import M3U8Sites.SiteMissAV
+import M3U8Sites.SiteSupJav
 
 siteList = (
     M3U8Sites.SiteJableTV.SiteJableTV,              # https://jable.tv
     M3U8Sites.SiteJableTV.SiteJableTV_Backup,       # https://fs1.app
     M3U8Sites.SiteMissAV.SiteMissAV,                # https://missav.ai
+    M3U8Sites.SiteSupJav.SiteSupJav,                # https://supjav.com
 
     M3U8Sites.Site91Porn.SiteJableOrg,              # https://www.jable.org
     M3U8Sites.Site91Porn.SiteThisAV,                # https://www.thisav.org

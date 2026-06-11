@@ -5,4 +5,5 @@ headers = {
 MIRRORS = {
     'missav': ['missav.ai', 'missav.ws', 'missav123.com', 'missav.live'],
     'jable':  ['jable.tv', 'fs1.app'],
+    'supjav': ['supjav.com'],
 }

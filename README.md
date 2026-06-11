@@ -15,7 +15,7 @@
 
 > **Jable.tv 影片下載**、**MissAV 影片下載**最好用的 GUI 桌面工具，不需要命令列。提供完整的圖形介面，支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓、M3U8/HLS 串流下載。
 >
-> The best **Jable TV downloader** with a full GUI — no CLI needed. Download videos from **Jable TV** and **MissAV** with a built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run.
+> The best **Jable TV downloader** with a full GUI — no CLI needed. Download videos from **Jable TV**, **MissAV**, and **SupJav** with a built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run.
 
 ---
 
@@ -101,6 +101,7 @@
 |------|:----:|:----:|:----:|
 | [Jable.tv](https://jable.tv) | ✅ | ✅ | ✅ |
 | [MissAV](https://missav.ai) | ✅ | ✅ | ✅ |
+| [SupJav](https://supjav.com) | ✅ | ✅ | ✅ |
 | 其他 M3U8 網站 | — | — | ✅ |
 
 ## 快速開始

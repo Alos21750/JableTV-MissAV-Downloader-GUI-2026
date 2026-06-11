@@ -13,7 +13,7 @@
   <a href="./README.md">繁體中文</a> ｜ English
 </p>
 
-> The best **Jable TV downloader** with a full GUI — no command line needed. Download videos from **Jable TV** and **MissAV** with a built-in video browser, keyword search, multi-select batch download, and up to 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run, no Python or installation needed. Also supports FC2 videos, Chinese subtitle filtering, actress/category page bulk download, M3U8/HLS streams, and resolution selection.
+> The best **Jable TV downloader** with a full GUI — no command line needed. Download videos from **Jable TV**, **MissAV**, and **SupJav** with a built-in video browser, keyword search, multi-select batch download, and up to 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run, no Python or installation needed. Also supports FC2 videos, Chinese subtitle filtering, actress/category page bulk download, M3U8/HLS streams, and resolution selection.
 
 ---
 
@@ -101,6 +101,7 @@ This project ships two independent executables:
 |------|:------:|:------:|:--------:|
 | [Jable.tv](https://jable.tv) | ✅ | ✅ | ✅ |
 | [MissAV](https://missav.ai) | ✅ | ✅ | ✅ |
+| [SupJav](https://supjav.com) | ✅ | ✅ | ✅ |
 | Other M3U8 sites | — | — | ✅ |
 
 ## Quick Start

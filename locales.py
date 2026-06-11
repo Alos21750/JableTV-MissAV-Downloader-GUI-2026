@@ -5,9 +5,9 @@
 STRINGS = {
     'zh': {
         # Header
-        'app_brand_1': 'JableTV & MissAV',
+        'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.3.2',
+        'version_label': 'v2.3.3',
         'by_author': 'by ALOS',
 
         # Tabs
@@ -74,7 +74,7 @@ STRINGS = {
         'concurrent_setting': '同時下載數',
         'concurrent_desc': '同時進行的下載任務數量，過多可能降低單個下載速度',
         'about': '關於',
-        'app_full_name': 'JableTV & MissAV Downloader',
+        'app_full_name': 'JableTV · MissAV · SupJav Downloader',
         'disclaimer': '僅供學習與研究用途',
 
         # Smalltool
@@ -113,9 +113,9 @@ STRINGS = {
     },
     'en': {
         # Header
-        'app_brand_1': 'JableTV & MissAV',
+        'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.3.2',
+        'version_label': 'v2.3.3',
         'by_author': 'by ALOS',
 
         # Tabs
@@ -182,7 +182,7 @@ STRINGS = {
         'concurrent_setting': 'Concurrent Downloads',
         'concurrent_desc': 'Number of simultaneous downloads; too many may reduce individual speed',
         'about': 'About',
-        'app_full_name': 'JableTV & MissAV Downloader',
+        'app_full_name': 'JableTV · MissAV · SupJav Downloader',
         'disclaimer': 'For educational and research purposes only',
 
         # Smalltool
