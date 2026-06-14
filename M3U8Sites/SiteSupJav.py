@@ -13,6 +13,7 @@ import threading as _threading
 from urllib.parse import quote
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+import site_i18n
 
 
 SUPREMEJAV = 'https://lk1.supremejav.com/supjav.php?c={}'
@@ -167,7 +168,8 @@ class SupJavBrowser:
 
     @classmethod
     def fetch_categories(cls, lang=''):
-        return [{'name': n, 'url': cls._with_lang(u, lang), 'count': 0}
+        return [{'name': site_i18n.loc(site_i18n.CATEGORY_I18N, u, n),
+                 'url': cls._with_lang(u, lang), 'count': 0}
                 for n, u in cls.CATEGORIES]
 
     @classmethod

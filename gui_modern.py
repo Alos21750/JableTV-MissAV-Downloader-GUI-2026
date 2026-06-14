@@ -20,6 +20,7 @@ from PIL import Image
 
 import config
 import M3U8Sites
+import site_i18n
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
 from M3U8Sites.SiteSupJav import SupJavBrowser
@@ -503,25 +504,29 @@ class ModernApp(ctk.CTk):
         config.set_theme(self._theme_mode)
         self._theme_btn.configure(text=self._theme_glyph())
 
-    def _tab_names(self):
-        return [T('tab_browse'), T('tab_download'), T('tab_settings')]
-
     def _current_tab_index(self):
-        try:
-            current = self._tabs.get()
-            self._active_tab_idx = self._tab_names().index(current)
-        except (AttributeError, ValueError, tk.TclError):
-            pass
         return self._active_tab_idx
 
     def _set_tab_index(self, idx: int):
-        names = self._tab_names()
-        idx = max(0, min(idx, len(names) - 1))
-        try:
-            self._tabs.set(names[idx])
-            self._active_tab_idx = idx
-        except (AttributeError, tk.TclError):
-            pass
+        idx = max(0, min(int(idx), len(self._tab_keys) - 1))
+        self._select_tab(self._tab_keys[idx])
+
+    def _select_tab(self, key):
+        if key not in getattr(self, '_tab_frames', {}):
+            return
+        for f in self._tab_frames.values():
+            f.pack_forget()
+        self._tab_frames[key].pack(fill='both', expand=True)
+        for k, w in self._tab_buttons.items():
+            active = (k == key)
+            try:
+                w['lbl'].configure(
+                    text_color=(TEXT_PRI if active else TEXT_SEC),
+                    font=(ui_font(), 15, 'bold') if active else (ui_font(), 15))
+                w['underline'].configure(fg_color=(ACCENT if active else 'transparent'))
+            except tk.TclError:
+                pass
+        self._active_tab_idx = self._tab_keys.index(key)
 
     def _speed_values(self):
         return [T('unlimited'), '1 MB/s', '2 MB/s', '5 MB/s',
@@ -645,7 +650,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.1  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.2  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -672,23 +677,45 @@ class ModernApp(ctk.CTk):
         # Header separator
         ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
 
-        # ── Tab view ────────────────────────────────────────────────
-        self._tabs = ctk.CTkTabview(self, fg_color=BG_DARK,
-                                     segmented_button_fg_color=BG_HEADER,
-                                     segmented_button_selected_color=BG_CARD,
-                                     segmented_button_selected_hover_color=BG_CARD_HOVER,
-                                     segmented_button_unselected_color=BG_HEADER,
-                                     segmented_button_unselected_hover_color=BG_CARD_HOVER,
-                                     text_color=TEXT_SEC,
-                                     corner_radius=0)
-        self._tabs.pack(fill='both', expand=True, padx=0, pady=0)
-        self._tabs.add(T('tab_browse'))
-        self._tabs.add(T('tab_download'))
-        self._tabs.add(T('tab_settings'))
+        # ── Custom underline tab bar (Studio Noir) ──────────────────
+        self._tab_keys = ['browse', 'download', 'settings']
+        tab_labels = {'browse': T('tab_browse'), 'download': T('tab_download'), 'settings': T('tab_settings')}
+
+        tabbar = ctk.CTkFrame(self, height=50, fg_color=BG_HEADER, corner_radius=0)
+        tabbar.pack(fill='x')
+        tabbar.pack_propagate(False)
+        tabbar_inner = ctk.CTkFrame(tabbar, fg_color='transparent')
+        tabbar_inner.pack(side='left', padx=18, fill='y')
+
+        self._tab_buttons = {}   # key -> {'lbl': CTkLabel, 'underline': CTkFrame}
+        for key in self._tab_keys:
+            holder = ctk.CTkFrame(tabbar_inner, fg_color='transparent')
+            holder.pack(side='left', padx=(0, 6), fill='y')
+            # underline FIRST at the bottom so it is never clipped
+            underline = ctk.CTkFrame(holder, height=3, fg_color='transparent', corner_radius=2)
+            underline.pack(side='bottom', fill='x', padx=4, pady=(0, 0))
+            lbl = ctk.CTkLabel(holder, text=tab_labels[key],
+                               font=(ui_font(), 15), text_color=TEXT_SEC, cursor='hand2')
+            lbl.pack(side='top', fill='both', expand=True, padx=14)
+            lbl.bind('<Button-1>', lambda e, k=key: self._select_tab(k))
+            self._tab_buttons[key] = {'lbl': lbl, 'underline': underline}
+
+        # Header separator already drawn above; add one below the tab bar
+        ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        # Content container holding the 3 tab frames
+        self._tab_container = ctk.CTkFrame(self, fg_color=BG_DARK, corner_radius=0)
+        self._tab_container.pack(fill='both', expand=True)
+        self._tab_frames = {}
+        for key in self._tab_keys:
+            self._tab_frames[key] = ctk.CTkFrame(
+                self._tab_container, fg_color=BG_DARK, corner_radius=0)
 
         self._build_browse_tab()
         self._build_download_tab()
         self._build_settings_tab()
+
+        self._select_tab(self._tab_keys[self._active_tab_idx])
 
         # ── Status bar ──────────────────────────────────────────────
         ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
@@ -702,7 +729,7 @@ class ModernApp(ctk.CTk):
 
     # ── Browse Tab ───────────────────────────────────────────────────
     def _build_browse_tab(self):
-        tab = self._tabs.tab(T('tab_browse'))
+        tab = self._tab_frames['browse']
 
         # ── Top toolbar ─────────────────────────────────────────────
         top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=58)
@@ -857,7 +884,7 @@ class ModernApp(ctk.CTk):
 
     # ── Download Tab ─────────────────────────────────────────────────
     def _build_download_tab(self):
-        tab = self._tabs.tab(T('tab_download'))
+        tab = self._tab_frames['download']
 
         # ── Input section ───────────────────────────────────────────
         input_frame = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0)
@@ -958,7 +985,7 @@ class ModernApp(ctk.CTk):
 
     # ── Settings Tab ─────────────────────────────────────────────────
     def _build_settings_tab(self):
-        tab = self._tabs.tab(T('tab_settings'))
+        tab = self._tab_frames['settings']
 
         outer = ctk.CTkScrollableFrame(
             tab, fg_color=BG_DARK, corner_radius=0,
@@ -1182,7 +1209,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.1',
+        ctk.CTkLabel(ver_badge, text='v2.5.2',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -1215,7 +1242,8 @@ class ModernApp(ctk.CTk):
                 failed = True
                 cats = []
             if not cats and hasattr(browser, 'HOMEPAGE_SECTIONS'):
-                cats = [{'name': name, 'url': url, 'count': 0, 'section': True}
+                cats = [{'name': site_i18n.loc(site_i18n.CATEGORY_I18N, url, name),
+                         'url': url, 'count': 0, 'section': True}
                         for name, url in browser.HOMEPAGE_SECTIONS]
 
             def _apply():
@@ -1579,12 +1607,13 @@ class ModernApp(ctk.CTk):
         tags = JableTVBrowser.SIDEBAR_TAGS
         for group_name, tag_list in tags.items():
             expanded = self._sidebar_expanded.get(group_name, False)
+            display_group_name = site_i18n.loc(site_i18n.TAG_GROUPS, group_name, group_name)
 
             # Group header button
             arrow = '▾' if expanded else '▸'
             hdr = ctk.CTkButton(
                 self._sidebar,
-                text=f'{arrow} {group_name} ({len(tag_list)})',
+                text=f'{arrow} {display_group_name} ({len(tag_list)})',
                 fg_color='transparent', hover_color=BG_CARD_HOVER,
                 text_color=TEXT_SEC, anchor='w',
                 font=(ui_font(), 10, 'bold'),
@@ -1595,13 +1624,14 @@ class ModernApp(ctk.CTk):
             if expanded:
                 for name, slug in tag_list:
                     tag_url = JableTVBrowser.tag_url(slug)
+                    display_name = site_i18n.loc(site_i18n.TAGS, slug, name)
                     btn = ctk.CTkButton(
-                        self._sidebar, text=name,
+                        self._sidebar, text=display_name,
                         fg_color='transparent', hover_color=BG_CARD_HOVER,
                         text_color=TEXT_SEC, anchor='w',
                         font=(ui_font(), 10),
                         height=26, corner_radius=8,
-                        command=lambda u=tag_url, n=name: self._on_tag_click(u, n))
+                        command=lambda u=tag_url, n=display_name: self._on_tag_click(u, n))
                     btn.pack(fill='x', padx=(18, 6), pady=0)
 
     def _toggle_group(self, group: str):

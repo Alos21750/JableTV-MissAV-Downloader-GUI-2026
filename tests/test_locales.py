@@ -79,7 +79,7 @@ def test_ui_font_tracks_current_language():
     assert locales.ui_font() == 'Yu Gothic UI'
 
     locales.set_lang('en')
-    assert locales.ui_font() == 'Segoe UI'
+    assert locales.ui_font() == 'Microsoft JhengHei'
 
 
 def test_state_label_translates_known_codes_and_keeps_unknown_codes():

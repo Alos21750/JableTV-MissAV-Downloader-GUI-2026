@@ -11,6 +11,7 @@ except ImportError:
 import threading as _threading
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+import site_i18n
 
 
 _browser_scraper = None
@@ -282,7 +283,8 @@ class JableTVBrowser:
     @classmethod
     def fetch_categories(cls):
         """Return homepage sections + dynamic categories from /categories/."""
-        cats = [{'name': name, 'url': url, 'count': 0, 'section': True}
+        cats = [{'name': site_i18n.loc(site_i18n.CATEGORY_I18N, url, name),
+                 'url': url, 'count': 0, 'section': True}
                 for name, url in cls.HOMEPAGE_SECTIONS]
         try:
             def _validate(resp):
@@ -301,7 +303,8 @@ class JableTVBrowser:
                     count = int(count_match.group(1).replace(',', '')) if count_match else 0
                     name = re.sub(r'\d[\d,]*\s*部影片', '', name).strip()
                     slug = href.rstrip('/').split('/')[-1]
-                    cats.append({'name': name, 'slug': slug, 'url': href, 'count': count})
+                    cats.append({'name': site_i18n.loc(site_i18n.CATEGORY_I18N, href, name),
+                                 'slug': slug, 'url': href, 'count': count})
         except Exception:
             pass
         return cats

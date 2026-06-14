@@ -10,6 +10,7 @@ except ImportError:
     _use_cffi = False
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+import site_i18n
 
 
 def _unpack_js_eval(script_text):
@@ -149,10 +150,11 @@ class MissAVBrowser:
         """
         cats = []
         for name, url in cls.CATEGORIES:
+            localized_name = site_i18n.loc(site_i18n.CATEGORY_I18N, url, name)
             if lang:
                 # Insert language prefix: .../dm296/en/today-hot
                 url = re.sub(r'(/dm\d+/)', rf'\1{lang}/', url)
-            cats.append({'name': name, 'url': url, 'count': 0})
+            cats.append({'name': localized_name, 'url': url, 'count': 0})
         return cats
 
     @classmethod

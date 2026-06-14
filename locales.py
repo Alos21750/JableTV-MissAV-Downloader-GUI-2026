@@ -3,7 +3,12 @@
 """Localization strings for the GUI apps."""
 
 LANGUAGES = [('en', 'English'), ('zh', '繁體中文'), ('zh-Hans', '简体中文'), ('ja', '日本語')]
-FONTS = {'en': 'Segoe UI', 'zh': 'Microsoft JhengHei', 'zh-Hans': 'Microsoft YaHei', 'ja': 'Yu Gothic UI'}
+FONTS = {
+    'en': 'Microsoft JhengHei',
+    'zh': 'Microsoft JhengHei',
+    'zh-Hans': 'Microsoft YaHei',
+    'ja': 'Yu Gothic UI',
+}
 
 
 STRINGS = {
@@ -11,7 +16,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.5.1',
+        'version_label': 'v2.5.2',
         'by_author': 'by ALOS',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -173,7 +178,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.5.1',
+        'version_label': 'v2.5.2',
         'by_author': 'by ALOS',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -336,7 +341,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': '下载器',
-        'version_label': 'v2.5.1',
+        'version_label': 'v2.5.2',
         'by_author': 'by ALOS',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -498,7 +503,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'ダウンローダー',
-        'version_label': 'v2.5.1',
+        'version_label': 'v2.5.2',
         'by_author': 'by ALOS',
         'status_ready': '準備完了',
         'site_label': 'サイト',

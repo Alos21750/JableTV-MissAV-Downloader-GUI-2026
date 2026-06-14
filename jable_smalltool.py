@@ -49,7 +49,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.1'
+APP_VERSION = '2.5.2'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -387,9 +387,10 @@ class SmallToolWorker:
         if site_name == 'MissAV':
             lang = T('missav_lang')
             if lang:
-                for cat in MissAVBrowser.fetch_categories(lang=lang):
-                    if cat.get('name') == cat_name:
-                        return cat.get('url') or cat_url
+                # Insert the language segment after /dm{N}/ (same scheme as MissAVBrowser),
+                # independent of localized display names.
+                new_url = re.sub(r'(/dm\d+/)', rf'\1{lang}/', cat_url)
+                return new_url
             return cat_url
         # JableTV does not expose language-specific listing variants.
         return cat_url
