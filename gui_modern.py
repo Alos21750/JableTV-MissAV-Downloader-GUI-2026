@@ -57,6 +57,10 @@ BORDER_CARD   = ('#E6E3DE', '#242329')
 
 DEFAULT_CONCURRENT = 2
 MAX_CONCURRENT = 10
+MAX_VISIBLE_ROWS = 200
+ROW_BUILD_BUDGET = 40
+MAX_PERSIST_ROWS = 1000
+HARD_LOAD_LIMIT = 5000
 CSV_PATH = config.queue_csv_path()
 ERR_BLOCKED = '__cf_blocked__'
 
@@ -65,6 +69,35 @@ SITES = {
     'MissAV': {'browser': MissAVBrowser},
     'SupJav': {'browser': SupJavBrowser},
 }
+
+
+_STATE_PRIORITY = {
+    '下載中': 0,
+    '準備中': 1,
+    '等待中': 2,
+    '未完成': 3,
+    '封鎖/解析失敗': 4,
+    '網址錯誤': 5,
+    '已下載': 6,
+    '已取消': 7,
+}
+
+
+def _visible_window(items, cap):
+    ordered = sorted(
+        enumerate(items),
+        key=lambda pair: (_STATE_PRIORITY.get(pair[1].state, 8), pair[0]))
+    return [item for _, item in ordered[:cap]]
+
+
+def _select_persist(items, cap):
+    terminal = {'已下載', '已取消', '網址錯誤'}
+    resumable = [i for i in items if i.state not in terminal]
+    terminal_items = [i for i in items if i.state in terminal]
+    budget = max(0, cap - len(resumable))
+    kept_terminal = terminal_items[-budget:] if budget > 0 else []
+    keep_ids = {id(i) for i in resumable} | {id(i) for i in kept_terminal}
+    return [i for i in items if id(i) in keep_ids]
 
 
 # ── Download Manager ────────────────────────────────────────────────
@@ -321,6 +354,9 @@ class DownloadManager:
     def save_csv(self, path: str):
         with self._lock:
             items = list(self._items.values())
+        # Python 3.7+ dict insertion order is used as the recency proxy for
+        # capped terminal history; resumable items are never dropped.
+        items = _select_persist(items, MAX_PERSIST_ROWS)
         folder = os.path.dirname(path)
         if folder:
             os.makedirs(folder, exist_ok=True)
@@ -336,24 +372,40 @@ class DownloadManager:
         os.replace(tmp, path)
 
     def load_csv(self, path: str):
-        if not os.path.exists(path):
-            return
-        with open(path, 'r', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                url = row.get('網址', '')
-                if url:
-                    state = row.get('狀態', '')
-                    if state in ('下載中', '準備中', '等待中'):
-                        state = '未完成'
-                    item = self.add_item(
-                        url, row.get('名稱', ''), state,
-                        row.get('目標', ''))
-                    progress = (row.get('進度', '') or '').rstrip('%')
-                    try:
-                        item.progress = int(float(progress))
-                    except (TypeError, ValueError):
-                        pass
-                    item.speed = row.get('速度', '') or ''
+        try:
+            if not os.path.exists(path):
+                return
+            with open(path, 'r', encoding='utf-8') as f:
+                for idx, row in enumerate(csv.DictReader(f)):
+                    if idx >= HARD_LOAD_LIMIT:
+                        break
+                    url = row.get('網址', '')
+                    if url:
+                        state = row.get('狀態', '')
+                        if state in ('下載中', '準備中', '等待中'):
+                            state = '未完成'
+                        item = self.add_item(
+                            url, row.get('名稱', ''), state,
+                            row.get('目標', ''))
+                        progress = (row.get('進度', '') or '').rstrip('%')
+                        try:
+                            item.progress = int(float(progress))
+                        except (TypeError, ValueError):
+                            pass
+                        item.speed = row.get('速度', '') or ''
+            # Keep load memory bounded after the safety read limit. Python 3.7+
+            # dict insertion order is the recency proxy for terminal items.
+            kept = _select_persist(self.get_items(), MAX_PERSIST_ROWS)
+            keep_urls = {item.url for item in kept}
+            with self._lock:
+                for url in list(self._items.keys()):
+                    if url not in keep_urls:
+                        self._items.pop(url, None)
+        except (OSError, UnicodeDecodeError, csv.Error):
+            try:
+                os.replace(path, path + '.bak')
+            except Exception:
+                pass
 
     @property
     def active_count(self) -> int:
@@ -469,6 +521,9 @@ class ModernApp(ctk.CTk):
         self._card_widgets: dict = {}  # url -> {card, sel_btn}
         self._dl_rows: dict = {}   # url -> {row, state_lbl, name_lbl, pb, pct, spd, remove}
         self._dl_empty_lbl = None
+        self._dl_footer_lbl = None
+        self._dl_drain_id = None
+        self._dl_gen = 0
         self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         self._speed_mbps = 0.0
         self._download_autosave_ticks = 0
@@ -688,6 +743,9 @@ class ModernApp(ctk.CTk):
 
             self._card_widgets = {}
             self._dl_rows = {}
+            self._dl_footer_lbl = None
+            self._dl_drain_id = None
+            self._dl_gen += 1
             self._categories = []
             self._selected_urls.clear()
             self._dl_empty_lbl = None
@@ -750,7 +808,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.6  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.7  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -1283,6 +1341,48 @@ class ModernApp(ctk.CTk):
         self._on_cf_host_change(default_host)
         self._refresh_cf_status()
 
+        # Saved download queue
+        queue = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+                             border_width=1, border_color=BORDER_CARD)
+        queue.pack(fill='x', pady=(0, 16))
+
+        queue_hdr = ctk.CTkFrame(queue, fg_color='transparent')
+        queue_hdr.pack(fill='x', padx=20, pady=(16, 4))
+        ctk.CTkLabel(queue_hdr, text=T('queue_card_title'),
+                     font=(ui_font(), 14, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+        ctk.CTkLabel(queue, text=T('queue_card_desc'),
+                     text_color=TEXT_DIM,
+                     font=(ui_font(), 9)).pack(anchor='w', padx=20, pady=(0, 12))
+
+        ctk.CTkFrame(queue, height=1, fg_color=BORDER).pack(fill='x', padx=20)
+
+        row_queue_path = ctk.CTkFrame(queue, fg_color='transparent')
+        row_queue_path.pack(fill='x', padx=20, pady=(16, 2))
+        ctk.CTkLabel(row_queue_path, text=T('queue_path_label'), text_color=TEXT_PRI,
+                     font=(ui_font(), 11), width=90,
+                     anchor='w').pack(side='left')
+        queue_path_entry = ctk.CTkEntry(
+            row_queue_path, height=34, corner_radius=8,
+            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI)
+        queue_path_entry.pack(side='left', fill='x', expand=True, padx=10)
+        queue_path_entry.insert(0, config.queue_csv_path())
+        queue_path_entry.configure(state='readonly')
+
+        row_queue_actions = ctk.CTkFrame(queue, fg_color='transparent')
+        row_queue_actions.pack(fill='x', padx=20, pady=(10, 18))
+        ctk.CTkButton(row_queue_actions, text=T('open_queue_folder'),
+                      width=110, height=34, corner_radius=8,
+                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._open_queue_folder).pack(side='left', padx=(100, 6))
+        ctk.CTkButton(row_queue_actions, text=T('clear_saved_queue'),
+                      width=140, height=34, corner_radius=8,
+                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=ERROR_C,
+                      command=self._clear_saved_queue).pack(side='left')
+
         # ── About Card ──────────────────────────────────────────────
         about = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
                               border_width=1, border_color=BORDER_CARD)
@@ -1309,7 +1409,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.6',
+        ctk.CTkLabel(ver_badge, text='v2.5.7',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -1906,6 +2006,13 @@ class ModernApp(ctk.CTk):
 
     def _clear_queue(self):
         self._dlmgr.clear_all()
+        self._dl_gen += 1
+        self._last_download_save_sig = None
+        try:
+            self._dlmgr.save_csv(CSV_PATH)
+        except Exception as e:
+            print(f'[clear queue save failed] {e}', flush=True)
+        self._refresh_downloads(schedule=False)
 
     def _on_cf_host_change(self, host):
         ov = config.get_cf_override(host) or {}
@@ -1977,12 +2084,123 @@ class ModernApp(ctk.CTk):
         except OSError as e:
             messagebox.showerror(T('open_folder_failed_title'), str(e))
 
+    def _open_queue_folder(self):
+        import subprocess, platform
+        folder = os.path.dirname(config.queue_csv_path())
+        system = platform.system()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if system == 'Windows':
+                os.startfile(folder)
+            elif system == 'Darwin':
+                subprocess.Popen(['open', folder])
+            else:
+                subprocess.Popen(['xdg-open', folder])
+        except OSError as e:
+            messagebox.showerror(T('open_folder_failed_title'), str(e))
+
+    def _clear_saved_queue(self):
+        if not messagebox.askyesno(T('clear_saved_queue'),
+                                   T('clear_saved_queue_confirm')):
+            return
+        self._dlmgr.clear_all()
+        self._dl_gen += 1
+        self._last_download_save_sig = None
+        try:
+            self._dlmgr.save_csv(CSV_PATH)
+            if getattr(self, '_status_lbl', None) is not None:
+                self._status_lbl.configure(text=T('clear_saved_queue_done'))
+            messagebox.showinfo(T('clear_saved_queue'), T('clear_saved_queue_done'))
+        except Exception as e:
+            messagebox.showerror(T('clear_saved_queue_failed'), str(e))
+        finally:
+            self._refresh_downloads(schedule=False)
+
     # ── Download list refresh (incremental — no destroy/rebuild storm) ──
     _STATE_COLORS = {
         '下載中': ACCENT, '準備中': WARNING, '等待中': WARNING,
         '已下載': SUCCESS, '未完成': WARNING, '已取消': TEXT_DIM,
         '網址錯誤': ERROR_C, '封鎖/解析失敗': ERROR_C,
     }
+
+    def _sync_dl_footer(self, hidden: int):
+        if hidden > 0:
+            text = T('dl_list_more_not_shown', n=hidden)
+            if self._dl_footer_lbl is None:
+                self._dl_footer_lbl = ctk.CTkLabel(
+                    self._dl_scroll, text=text, text_color=TEXT_DIM,
+                    font=(ui_font(), 11))
+            else:
+                self._dl_footer_lbl.configure(text=text)
+            try:
+                self._dl_footer_lbl.pack_forget()
+            except Exception:
+                pass
+            self._dl_footer_lbl.pack(fill='x', padx=12, pady=(4, 16))
+        elif self._dl_footer_lbl is not None:
+            try:
+                self._dl_footer_lbl.destroy()
+            except Exception:
+                pass
+            self._dl_footer_lbl = None
+
+    def _build_visible_rows(self, visible: list[DownloadItem]) -> bool:
+        built = 0
+        more_to_build = False
+        for item in visible:
+            widgets = self._dl_rows.get(item.url)
+            if widgets is not None:
+                self._update_dl_row(widgets, item)
+                continue
+            if built >= ROW_BUILD_BUDGET:
+                more_to_build = True
+                continue
+            try:
+                self._dl_rows[item.url] = self._build_dl_row(item)
+                built += 1
+            except Exception as e:
+                print(f'[download row build failed] {item.url}: {e}', flush=True)
+        return more_to_build
+
+    def _arm_dl_drain(self):
+        if (self._dl_drain_id is not None or self._is_closing
+                or self._rebuilding):
+            return
+        gen = self._dl_gen
+        try:
+            self._dl_drain_id = self.after(
+                20, lambda g=gen: self._drain_dl_rows(g))
+        except tk.TclError:
+            self._dl_drain_id = None
+
+    def _drain_dl_rows(self, gen: int):
+        self._dl_drain_id = None
+        if (self._is_closing or self._rebuilding or gen != self._dl_gen
+                or getattr(self, '_dl_scroll', None) is None):
+            return
+        try:
+            items = self._dlmgr.get_items()
+            visible = _visible_window(items, MAX_VISIBLE_ROWS)
+            visible_set = {i.url for i in visible}
+
+            for url in list(self._dl_rows.keys()):
+                if url not in visible_set:
+                    widgets = self._dl_rows.pop(url)
+                    try:
+                        widgets['row'].destroy()
+                    except Exception:
+                        pass
+
+            if not items:
+                self._sync_dl_footer(0)
+                return
+
+            more_to_build = self._build_visible_rows(visible)
+            self._sync_dl_footer(len(items) - len(visible))
+            if more_to_build:
+                self._arm_dl_drain()
+        except tk.TclError:
+            pass
 
     def _refresh_downloads(self, schedule: bool = True):
         if self._is_closing:
@@ -1997,11 +2215,12 @@ class ModernApp(ctk.CTk):
             return
         try:
             items = self._dlmgr.get_items()
-            current_urls = {i.url for i in items}
+            visible = _visible_window(items, MAX_VISIBLE_ROWS)
+            visible_set = {i.url for i in visible}
 
-            # Remove rows for items no longer present
+            # Remove rows outside the bounded visible window.
             for url in list(self._dl_rows.keys()):
-                if url not in current_urls:
+                if url not in visible_set:
                     widgets = self._dl_rows.pop(url)
                     try:
                         widgets['row'].destroy()
@@ -2024,12 +2243,12 @@ class ModernApp(ctk.CTk):
                         pass
                     self._dl_empty_lbl = None
 
-                # Create or update each row
-                for item in items:
-                    if item.url in self._dl_rows:
-                        self._update_dl_row(self._dl_rows[item.url], item)
-                    else:
-                        self._dl_rows[item.url] = self._build_dl_row(item)
+                more_to_build = self._build_visible_rows(visible)
+                self._sync_dl_footer(len(items) - len(visible))
+                if more_to_build:
+                    self._arm_dl_drain()
+            if not items:
+                self._sync_dl_footer(0)
 
             # Update status bar
             a = self._dlmgr.active_count
@@ -2044,8 +2263,8 @@ class ModernApp(ctk.CTk):
                 parts.append(f'{state_label("已下載")} {done}')
             self._status_lbl.configure(text='  |  '.join(parts) if parts else T('status_ready'))
             self._autosave_downloads(items)
-        except (tk.TclError, AttributeError):
-            pass
+        except Exception as e:
+            print(f'[download refresh failed] {e}', flush=True)
         finally:
             if schedule and not self._is_closing:
                 try:
@@ -2070,55 +2289,64 @@ class ModernApp(ctk.CTk):
     def _build_dl_row(self, item: DownloadItem) -> dict:
         """Build one download row once; return widget handles for in-place updates."""
         color = self._STATE_COLORS.get(item.state, TEXT_SEC)
+        row = None
+        try:
+            row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=10,
+                               border_width=1, border_color=BORDER,
+                               height=58)
+            row.pack(fill='x', padx=12, pady=6)
+            row.pack_propagate(False)
 
-        row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=10,
-                           border_width=1, border_color=BORDER,
-                           height=58)
-        row.pack(fill='x', padx=12, pady=6)
-        row.pack_propagate(False)
+            state_lbl = ctk.CTkLabel(row, text=state_label(item.state) if item.state else '—',
+                                     text_color=color,
+                                     font=(ui_font(), 10, 'bold'),
+                                     width=68)
+            state_lbl.pack(side='left', padx=(14, 6))
 
-        state_lbl = ctk.CTkLabel(row, text=state_label(item.state) if item.state else '—',
-                                 text_color=color,
-                                 font=(ui_font(), 10, 'bold'),
-                                 width=68)
-        state_lbl.pack(side='left', padx=(14, 6))
+            name_lbl = ctk.CTkLabel(row, text=item.name or item.url,
+                                    text_color=TEXT_PRI,
+                                    font=(ui_font(), 10),
+                                    anchor='w')
+            name_lbl.pack(side='left', fill='x', expand=True, padx=6)
 
-        name_lbl = ctk.CTkLabel(row, text=item.name or item.url,
-                                text_color=TEXT_PRI,
-                                font=(ui_font(), 10),
-                                anchor='w')
-        name_lbl.pack(side='left', fill='x', expand=True, padx=6)
+            # Progress widgets (created once, packed/unpacked dynamically)
+            pb = ctk.CTkProgressBar(row, width=130, height=10,
+                                    corner_radius=5,
+                                    fg_color=BG_INPUT,
+                                    progress_color=SUCCESS)
+            pb.set(max(0.0, min(1.0, item.progress / 100)))
+            pct_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
+                                   font=('Consolas', 9), width=40)
+            spd_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
+                                   font=('Consolas', 9), width=80)
 
-        # Progress widgets (created once, packed/unpacked dynamically)
-        pb = ctk.CTkProgressBar(row, width=130, height=10,
-                                corner_radius=5,
-                                fg_color=BG_INPUT,
-                                progress_color=SUCCESS)
-        pb.set(max(0.0, min(1.0, item.progress / 100)))
-        pct_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
-                               font=('Consolas', 9), width=40)
-        spd_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
-                               font=('Consolas', 9), width=80)
+            # Remove button
+            remove_btn = ctk.CTkButton(
+                row, text='✕', width=30, height=30,
+                corner_radius=8,
+                fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                hover_color=BG_CARD_HOVER,
+                text_color=TEXT_DIM, font=('Consolas', 12),
+                command=lambda u=item.url: self._dlmgr.remove_item(u))
+            remove_btn.pack(side='right', padx=(6, 12))
 
-        # Remove button
-        remove_btn = ctk.CTkButton(
-            row, text='✕', width=30, height=30,
-            corner_radius=8,
-            fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
-            hover_color=BG_CARD_HOVER,
-            text_color=TEXT_DIM, font=('Consolas', 12),
-            command=lambda u=item.url: self._dlmgr.remove_item(u))
-        remove_btn.pack(side='right', padx=(6, 12))
-
-        widgets = {
-            'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
-            'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
-            'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
-            'last_state': None, 'last_name': None, 'last_error': None,
-            'last_progress': -1, 'last_speed': None,
-        }
-        self._update_dl_row(widgets, item)
-        return widgets
+            widgets = {
+                'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
+                'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
+                '_before_remove': remove_btn,
+                'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
+                'last_state': None, 'last_name': None, 'last_error': None,
+                'last_progress': -1, 'last_speed': None,
+            }
+            self._update_dl_row(widgets, item)
+            return widgets
+        except Exception:
+            if row is not None:
+                try:
+                    row.destroy()
+                except Exception:
+                    pass
+            raise
 
     def _update_dl_row(self, w: dict, item: DownloadItem):
         """Update an existing row's fields in place without rebuilding widgets."""
@@ -2223,6 +2451,12 @@ class ModernApp(ctk.CTk):
     # ── Close ────────────────────────────────────────────────────────
     def _on_close(self):
         self._is_closing = True
+        if self._dl_drain_id:
+            try:
+                self.after_cancel(self._dl_drain_id)
+            except Exception:
+                pass
+            self._dl_drain_id = None
         try:
             self._thumb_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:

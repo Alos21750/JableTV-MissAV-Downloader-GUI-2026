@@ -173,6 +173,10 @@ python main.py -nogui True
 5. **Open Folder** — Click the folder button to view downloaded videos
 6. **Cancel / Cancel All** — Stop any or all downloads at any time
 
+## Changelog
+
+- **v2.5.7** — Fixed the large-queue startup freeze (#19); the download list now caps visible rows and loads/saves a bounded resumable queue; Settings now includes a saved-queue card to locate or clear `%APPDATA%\JableTV Downloader\download_queue.csv`.
+
 ## Technical Details
 
 - M3U8 stream protocol parsing & multi-threaded download

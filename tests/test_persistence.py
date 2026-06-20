@@ -39,7 +39,12 @@ _stub_runtime_dependency('m3u8', _m3u8_stub)
 _stub_runtime_dependency('customtkinter', _customtkinter_stub)
 
 import config
-from gui_modern import DownloadManager
+import gui_modern
+from gui_modern import DownloadItem, DownloadManager, _select_persist, _visible_window
+
+
+def _item(url, state):
+    return DownloadItem(url, name=url, state=state)
 
 
 def test_queue_csv_path_uses_appdata_download_queue(monkeypatch, tmp_path):
@@ -107,3 +112,116 @@ def test_download_queue_csv_load_normalizes_active_states(tmp_path):
     assert restored.state == '未完成'
     assert restored.progress == 33
     assert restored.dest == r'C:\Videos'
+
+
+def test__select_persist_keeps_all_resumable_and_caps_completed():
+    items = [
+        _item('c0', '已下載'),
+        _item('r0', '未完成'),
+        _item('c1', '已下載'),
+        _item('r1', '等待中'),
+        _item('c2', '已下載'),
+        _item('r2', '封鎖/解析失敗'),
+        _item('c3', '已下載'),
+        _item('c4', '已下載'),
+    ]
+
+    kept = _select_persist(items, 5)
+
+    assert [i.url for i in kept] == ['r0', 'r1', 'r2', 'c3', 'c4']
+
+
+def test__select_persist_never_drops_resumable_over_cap():
+    items = [
+        _item('r0', '未完成'),
+        _item('r1', '等待中'),
+        _item('r2', '封鎖/解析失敗'),
+        _item('c0', '已下載'),
+    ]
+
+    kept = _select_persist(items, 2)
+
+    assert [i.url for i in kept] == ['r0', 'r1', 'r2']
+
+
+def test_save_csv_caps_with_monkeypatched_max(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_modern, 'MAX_PERSIST_ROWS', 4)
+    path = tmp_path / 'download_queue.csv'
+    mgr = DownloadManager()
+    for idx in range(2):
+        mgr.add_item(f'https://example.test/r{idx}', state='未完成')
+    for idx in range(5):
+        mgr.add_item(f'https://example.test/c{idx}', state='已下載')
+
+    mgr.save_csv(str(path))
+
+    loaded = DownloadManager()
+    loaded.load_csv(str(path))
+    urls = [item.url for item in loaded.get_items()]
+
+    assert len(urls) <= 4
+    assert 'https://example.test/r0' in urls
+    assert 'https://example.test/r1' in urls
+    assert urls[-2:] == ['https://example.test/c3', 'https://example.test/c4']
+
+
+def test_load_csv_caps_large_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(gui_modern, 'MAX_PERSIST_ROWS', 4)
+    path = tmp_path / 'large_queue.csv'
+    with open(path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['狀態', '名稱', '進度', '速度', '網址', '目標'])
+        for idx in range(2):
+            writer.writerow(['未完成', f'Resumable {idx}', '0%', '',
+                             f'https://example.test/r{idx}', ''])
+        for idx in range(5):
+            writer.writerow(['已下載', f'Completed {idx}', '100%', '',
+                             f'https://example.test/c{idx}', ''])
+
+    mgr = DownloadManager()
+    mgr.load_csv(str(path))
+    urls = [item.url for item in mgr.get_items()]
+
+    assert len(urls) <= 4
+    assert 'https://example.test/r0' in urls
+    assert 'https://example.test/r1' in urls
+    assert urls[-2:] == ['https://example.test/c3', 'https://example.test/c4']
+
+
+def test_load_csv_handles_corrupt_file(tmp_path):
+    path = tmp_path / 'bad_queue.csv'
+    path.write_bytes(b'\xff\xfe\x00not utf-8')
+
+    mgr = DownloadManager()
+    mgr.load_csv(str(path))
+
+    assert len(mgr.get_items()) == 0
+    assert os.path.exists(str(path) + '.bak')
+
+
+def test_clear_then_save_writes_header_only(tmp_path):
+    path = tmp_path / 'download_queue.csv'
+    mgr = DownloadManager()
+    mgr.add_item('https://example.test/r0', state='未完成')
+    mgr.add_item('https://example.test/c0', state='已下載')
+
+    mgr.clear_all()
+    mgr.save_csv(str(path))
+
+    with open(path, 'r', encoding='utf-8', newline='') as f:
+        rows = list(csv.reader(f))
+    assert rows == [['狀態', '名稱', '進度', '速度', '網址', '目標']]
+
+
+def test__visible_window_prioritizes_active():
+    items = [
+        _item('done', '已下載'),
+        _item('queued', '等待中'),
+        _item('cancelled', '已取消'),
+        _item('incomplete', '未完成'),
+        _item('active', '下載中'),
+    ]
+
+    visible = _visible_window(items, 3)
+
+    assert [item.state for item in visible] == ['下載中', '等待中', '未完成']
