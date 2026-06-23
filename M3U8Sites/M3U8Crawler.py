@@ -6,6 +6,11 @@ import os
 import re
 import threading
 import requests
+try:
+    from curl_cffi import requests as _cffi_requests
+    _use_cffi = True
+except Exception:
+    _use_cffi = False
 import urllib.request
 import m3u8
 import config
@@ -258,6 +263,57 @@ def _get_session():
     return _session
 
 
+_cffi_tls = threading.local()
+_CDN_BLOCKED_MSG = "影片 CDN（surrit.com）被 Cloudflare 阻擋，請改用 VPN/WARP 或不同網路後重試"
+
+
+def _get_cffi_session():
+    session = getattr(_cffi_tls, 'session', None)
+    if session is None:
+        session = _cffi_requests.Session(impersonate='chrome')
+        _cffi_tls.session = session
+    return session
+
+
+def _is_cf_block_resp(resp):
+    try:
+        if getattr(resp, 'status_code', None) not in (403, 429, 503):
+            return False
+        resp_headers = getattr(resp, 'headers', {}) or {}
+        server = resp_headers.get('Server', resp_headers.get('server', '')) if hasattr(resp_headers, 'get') else ''
+        has_cf_ray = any(str(k).lower() == 'cf-ray' for k in resp_headers.keys())
+        content = getattr(resp, 'content', b'') or b''
+        head = content[:3000]
+        if isinstance(head, str):
+            head = head.encode('utf-8', errors='ignore')
+        head = head.lower()
+        return (
+            'cloudflare' in str(server).lower()
+            or has_cf_ray
+            or any(marker in head for marker in (
+                b'attention required',
+                b'just a moment',
+                b'cf_chl_',
+                b'cf-error',
+            ))
+        )
+    except Exception:
+        return False
+
+
+def _http_get(url, headers=None, timeout=20):
+    if _use_cffi:
+        try:
+            cffi_headers = {
+                k: v for k, v in dict(headers or {}).items()
+                if str(k).lower() != 'user-agent'
+            }
+            return _get_cffi_session().get(url, headers=cffi_headers, timeout=timeout)
+        except Exception:
+            pass
+    return _get_session().get(url, headers=dict(headers or {}), timeout=timeout)
+
+
 class M3U8Crawler:
     """A base class for all m3u8 crawl website tools."""
     skip_pattern = False
@@ -368,6 +424,24 @@ class M3U8Crawler:
         """Merged headers for m3u8 and segment requests."""
         return {**headers, **self._extra_headers}
 
+    def _load_m3u8(self, url):
+        resp = _http_get(url, self._m3u8_headers(), timeout=20)
+        status = getattr(resp, 'status_code', 0)
+        if status != 200:
+            if _is_cf_block_resp(resp):
+                raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+            raise Exception(f"m3u8 取得失敗 (HTTP {status}): {url}")
+        text = resp.text or ''
+        if '#EXTM3U' not in text:
+            content = getattr(resp, 'content', b'') or b''
+            head = content[:3000]
+            if isinstance(head, str):
+                head = head.encode('utf-8', errors='ignore')
+            if _is_cf_block_resp(resp) or b'cloudflare' in head.lower():
+                raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+            raise Exception(f"m3u8 內容無效（可能被阻擋或改版）: {url}")
+        return m3u8.loads(text, uri=str(getattr(resp, 'url', url)))
+
     def _getm3u8PlayList(self, uri):
         if uri.startswith(('http://', 'https://', '//')):
             playListUrl = urljoin(self._m3u8url, uri)
@@ -377,7 +451,7 @@ class M3U8Crawler:
             else: m3u8urlPath.pop(-1)
             baseurl = '/'.join(m3u8urlPath)
             playListUrl = baseurl + '/' + uri.lstrip('/')
-        m3u8obj = m3u8.load(playListUrl, headers=self._m3u8_headers())
+        m3u8obj = self._load_m3u8(playListUrl)
         variantBase = playListUrl.rsplit('/', 1)[0] + '/'
         return m3u8obj, variantBase
 
@@ -386,7 +460,7 @@ class M3U8Crawler:
         m3u8urlList.pop(-1)
         downloadurl = '/'.join(m3u8urlList) + '/'
 
-        m3u8obj = m3u8.load(self._m3u8url, headers=self._m3u8_headers())
+        m3u8obj = self._load_m3u8(self._m3u8url)
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
             selector = min if _prefer_lowest_res else max
@@ -403,7 +477,12 @@ class M3U8Crawler:
                 m3u8_key_uri = key.uri
                 if not m3u8_key_uri.startswith('http'):
                     m3u8_key_uri = downloadurl + m3u8_key_uri
-                resp = _get_session().get(m3u8_key_uri, headers=self._m3u8_headers(), timeout=15)
+                resp = _http_get(m3u8_key_uri, self._m3u8_headers(), timeout=15)
+                blocked = _is_cf_block_resp(resp)
+                if resp.status_code != 200 or blocked:
+                    if blocked:
+                        raise MirrorsBlockedError(_CDN_BLOCKED_MSG)
+                    raise Exception("AES 金鑰取得失敗")
                 self._key_content = resp.content
                 self._key_method = getattr(key, 'method', 'AES-128')
                 self._key_iv = getattr(key, 'iv', None)
@@ -418,6 +497,8 @@ class M3U8Crawler:
             else:
                 tsUrl = downloadurl + uri
             self._tsList.append(tsUrl)
+        if not self._tsList:
+            raise Exception("m3u8 無有效片段（可能被阻擋或改版）")
 
     def _make_cipher(self, seq_num=0):
         """Create a fresh AES cipher for one segment (thread-safe)."""
@@ -584,8 +665,7 @@ class M3U8Crawler:
             return True
 
         try:
-            session = _get_session()
-            response = session.get(url, headers=self._m3u8_headers(), timeout=25)
+            response = _http_get(url, self._m3u8_headers(), timeout=25)
             if response.status_code != 200:
                 return False
             content_ts = response.content
@@ -667,7 +747,7 @@ class M3U8Crawler:
         if not self.is_target_image_exist():
             self._create_dest_folder()
             try:
-                response = _get_session().get(self._imageUrl, headers=headers, timeout=15)
+                response = _http_get(self._imageUrl, self._m3u8_headers(), timeout=15)
                 if response.status_code != 200:
                     return None
                 with open(self._get_image_savename(), 'wb') as fs:

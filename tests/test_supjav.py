@@ -2,6 +2,8 @@ from urllib.parse import urljoin
 import sys
 import types
 
+import pytest
+
 
 def _stub_runtime_dependency(name, factory=None):
     try:
@@ -23,6 +25,7 @@ def _cloudscraper_stub():
 def _m3u8_stub():
     mod = types.ModuleType('m3u8')
     mod.load = lambda *args, **kwargs: None
+    mod.loads = lambda *a, **k: types.SimpleNamespace(playlists=[], segments=[], keys=[])
     return mod
 
 
@@ -53,6 +56,15 @@ from M3U8Sites.SiteSupJav import (
     _parse_videos,
     _strip_fake_header,
 )
+
+
+class _FakeResp:
+    def __init__(self, status_code=200, headers=None, content=b'', text=None, url='https://example.test/master.m3u8'):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.content = content
+        self.text = text if text is not None else content.decode('utf-8', errors='ignore')
+        self.url = url
 
 
 def test_supjav_validate_url_is_anchored():
@@ -170,11 +182,18 @@ def test_getm3u8_playlist_handles_absolute_and_relative_variants(monkeypatch):
 
     loaded = []
 
-    def fake_load(url, headers=None):
+    def fake_http_get(url, headers=None, timeout=20):
         loaded.append(url)
-        return object()
+        return _FakeResp(
+            status_code=200,
+            headers={},
+            content=b'#EXTM3U\n',
+            text='#EXTM3U\n',
+            url=url,
+        )
 
-    monkeypatch.setattr(crawler_mod.m3u8, 'load', fake_load)
+    monkeypatch.setattr(crawler_mod, '_http_get', fake_http_get)
+    monkeypatch.setattr(crawler_mod.m3u8, 'loads', lambda *a, **k: object())
 
     dummy = DummyCrawler()
     _, variant_base = dummy._getm3u8PlayList('https://hls4.turbosplayer.com/file/u/master.m3u8')
@@ -184,3 +203,73 @@ def test_getm3u8_playlist_handles_absolute_and_relative_variants(monkeypatch):
     _, variant_base = dummy._getm3u8PlayList('variant/master.m3u8')
     assert loaded[-1] == 'https://cdn1.turboviplay.com/data1/x/variant/master.m3u8'
     assert variant_base == 'https://cdn1.turboviplay.com/data1/x/variant/'
+
+
+def test_is_cf_block_resp_detects_only_cloudflare_blocks():
+    assert crawler_mod._is_cf_block_resp(_FakeResp(403, headers={'Server': 'cloudflare'}))
+    assert crawler_mod._is_cf_block_resp(_FakeResp(403, content=b'... Attention Required ...'))
+    assert not crawler_mod._is_cf_block_resp(_FakeResp(404))
+    assert not crawler_mod._is_cf_block_resp(_FakeResp(200, headers={'Server': 'cloudflare'}))
+
+
+def test_load_m3u8_raises_blocked_on_cloudflare_resp(monkeypatch):
+    class DummyCrawler(M3U8Crawler):
+        def __init__(self):
+            self._extra_headers = {}
+
+    monkeypatch.setattr(
+        crawler_mod,
+        '_http_get',
+        lambda *a, **k: _FakeResp(403, headers={'Server': 'cloudflare'}, url=a[0]),
+    )
+
+    with pytest.raises(crawler_mod.MirrorsBlockedError):
+        DummyCrawler()._load_m3u8('https://example.test/master.m3u8')
+
+
+def test_load_m3u8_raises_generic_on_non_cf_404(monkeypatch):
+    class DummyCrawler(M3U8Crawler):
+        def __init__(self):
+            self._extra_headers = {}
+
+    monkeypatch.setattr(
+        crawler_mod,
+        '_http_get',
+        lambda *a, **k: _FakeResp(404, url=a[0]),
+    )
+
+    with pytest.raises(Exception) as exc:
+        DummyCrawler()._load_m3u8('https://example.test/master.m3u8')
+    assert not isinstance(exc.value, crawler_mod.MirrorsBlockedError)
+
+
+def test_load_m3u8_raises_generic_when_content_is_not_playlist(monkeypatch):
+    class DummyCrawler(M3U8Crawler):
+        def __init__(self):
+            self._extra_headers = {}
+
+    monkeypatch.setattr(
+        crawler_mod,
+        '_http_get',
+        lambda *a, **k: _FakeResp(200, content=b'not a playlist', text='not a playlist', url=a[0]),
+    )
+
+    with pytest.raises(Exception) as exc:
+        DummyCrawler()._load_m3u8('https://example.test/master.m3u8')
+    assert not isinstance(exc.value, crawler_mod.MirrorsBlockedError)
+
+
+def test_create_m3u8_raises_on_zero_segments(monkeypatch):
+    class DummyCrawler(M3U8Crawler):
+        def __init__(self):
+            self._m3u8url = 'https://example.test/master.m3u8'
+            self._extra_headers = {}
+
+    monkeypatch.setattr(
+        DummyCrawler,
+        '_load_m3u8',
+        lambda self, url: types.SimpleNamespace(playlists=[], segments=[], keys=[]),
+    )
+
+    with pytest.raises(Exception):
+        DummyCrawler()._create_m3u8()

@@ -310,7 +310,10 @@ class DownloadManager:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
             with self._lock:
                 self._active.pop(url, None)
-            self._set_state(url, '未完成', error=str(exc))
+            if isinstance(exc, MirrorsBlockedError):
+                self._set_state(url, '封鎖/解析失敗', error=ERR_BLOCKED)
+            else:
+                self._set_state(url, '未完成', error=str(exc))
         self._try_next()
 
     def _try_next(self):
@@ -808,7 +811,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.7  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.8  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -1409,7 +1412,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.7',
+        ctk.CTkLabel(ver_badge, text='v2.5.8',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 

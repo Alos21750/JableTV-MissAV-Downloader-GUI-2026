@@ -175,6 +175,7 @@ python main.py -nogui True
 
 ## Changelog
 
+- **v2.5.8** — Fixed `HTTP 403 Forbidden` on MissAV downloads (#20): MissAV's video CDN (surrit.com) is now behind Cloudflare, so fetching the m3u8 playlist / video segments over Python's built-in HTTP stack was blocked (browsing thumbnails worked, but starting a download returned 403). The download layer (m3u8 playlist, AES key, TS segments, thumbnail) now uses the same curl_cffi (Chrome TLS fingerprint) connection as the page browser, and shows a clear "use a VPN/WARP" message when Cloudflare blocks the CDN. JableTV/SupJav downloads are unaffected.
 - **v2.5.7** — Fixed the large-queue startup freeze (#19); the download list now caps visible rows and loads/saves a bounded resumable queue; Settings now includes a saved-queue card to locate or clear `%APPDATA%\JableTV Downloader\download_queue.csv`.
 
 ## Technical Details

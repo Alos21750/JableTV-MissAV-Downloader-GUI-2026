@@ -49,7 +49,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.7'
+APP_VERSION = '2.5.8'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -664,11 +664,16 @@ class SmallToolWorker:
             return True
 
         self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
+        download_blocked = False
         for v in all_new_videos:
             if self._stop.is_set():
                 return False
-            self._download_one(v, dest)
+            if self._download_one(v, dest) == 'blocked':
+                download_blocked = True
 
+        if download_blocked:
+            self._log('[WARN] Download blocked — will retry before marking first run done.')
+            return False
         if scan_blocked or not scan_had_success:
             self._log('[WARN] Scan incomplete — first run flag not updated.')
             return False
@@ -691,6 +696,9 @@ class SmallToolWorker:
         try:
             site_obj = M3U8Sites.CreateSite(vurl, dest)
             if not site_obj or not site_obj.is_url_vaildate():
+                err = getattr(site_obj, '_last_error', None)
+                if isinstance(err, MirrorsBlockedError):
+                    raise err
                 self._log(f'  [SKIP] invalid URL: {vurl}')
                 self._mark_seen(vurl, title, skipped=True)
                 return
@@ -720,6 +728,11 @@ class SmallToolWorker:
                 return
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title)
+        except MirrorsBlockedError as e:
+            self._log(f'  [BLOCKED] {e}')
+            if site_obj:
+                self._cleanup_temp(site_obj)
+            return 'blocked'
         except Exception as e:
             self._log(f'  [ERR] {e}')
             if site_obj:
