@@ -5,15 +5,15 @@
   <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases"><img src="https://img.shields.io/github/downloads/Alos21750/JableTV-MissAV-Downloader-GUI-2026/total?style=for-the-badge&color=00C853&label=Downloads&logo=github&logoColor=white&cacheSeconds=86400" /></a>
 </p>
 
-<h1 align="center">JableTV Downloader — Jable TV 下載器 & MissAV 下載器</h1>
-<p align="center"><strong>Jable TV Download GUI ｜ MissAV Download GUI ｜ 免費桌面應用</strong></p>
+<h1 align="center">JableTV Downloader — Jable TV 下載器 & MissAV 下載器 & SupJav 下載器</h1>
+<p align="center"><strong>Jable TV Download GUI ｜ MissAV Download GUI ｜ SupJav Download GUI ｜ 免費桌面應用</strong></p>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
   繁體中文 ｜ <a href="./README.en.md">English</a>
 </p>
 
-> **Jable.tv 影片下載**、**MissAV 影片下載**最好用的 GUI 桌面工具，不需要命令列。提供完整的圖形介面，支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓、M3U8/HLS 串流下載。
+> **Jable.tv 影片下載**、**MissAV 影片下載**、**SupJav 影片下載**最好用的 GUI 桌面工具，不需要命令列。提供完整的圖形介面，支援瀏覽影片、搜尋關鍵字、批量多選下載、10 路並行高速下載。免安裝 Windows 執行檔，雙擊即用。同時支援 FC2、中文字幕自動篩選、女優/分類頁面一鍵全抓、M3U8/HLS 串流下載。
 >
 > The best **Jable TV downloader** with a full GUI — no CLI needed. Download videos from **Jable TV**, **MissAV**, and **SupJav** with a built-in browser, search, multi-select, and 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run.
 
@@ -24,7 +24,7 @@
 | | JableTV Downloader（本工具） | CLI 命令列工具 |
 |--|:---:|:---:|
 | 圖形介面（GUI） | **有** — 瀏覽、搜尋、點選即下載 | 無 — 需要打指令 |
-| 支援 MissAV | **有** | 通常只支援 JableTV |
+| 支援 MissAV、SupJav | **有** | 通常只支援 JableTV |
 | 批量下載 | **多選 + 10 路並行** | 通常一次一個 |
 | 免安裝 | **雙擊 .exe 即用** | 需要安裝 Python 和套件 |
 | 內建瀏覽器 | **有** — 直接在 App 裡看縮圖 | 無 |

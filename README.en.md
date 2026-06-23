@@ -5,8 +5,8 @@
   <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases"><img src="https://img.shields.io/github/downloads/Alos21750/JableTV-MissAV-Downloader-GUI-2026/total?style=for-the-badge&color=00C853&label=Downloads&logo=github&logoColor=white&cacheSeconds=86400" /></a>
 </p>
 
-<h1 align="center">JableTV Downloader — GUI Video Downloader for Jable TV & MissAV</h1>
-<p align="center"><strong>Jable TV Download Tool ｜ MissAV Download Tool ｜ Free Desktop App</strong></p>
+<h1 align="center">JableTV Downloader — GUI Video Downloader for Jable TV, MissAV & SupJav</h1>
+<p align="center"><strong>Jable TV Download Tool ｜ MissAV Download Tool ｜ SupJav Download Tool ｜ Free Desktop App</strong></p>
 <p align="center"><strong>by ALOS</strong></p>
 
 <p align="center">
@@ -24,7 +24,7 @@ Most Jable TV download tools are CLI-only — you need Python, pip, and a termin
 | | JableTV Downloader (this tool) | CLI-only tools |
 |--|:---:|:---:|
 | GUI interface | **Yes** — browse, search, click to download | No — requires typing commands |
-| MissAV support | **Yes** | Usually JableTV only |
+| MissAV & SupJav support | **Yes** | Usually JableTV only |
 | Batch download | **Multi-select + 10 parallel** | Usually one at a time |
 | No installation | **Double-click .exe** | Requires Python + pip install |
 | Built-in browser | **Yes** — browse thumbnails in-app | No |
