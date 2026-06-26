@@ -49,7 +49,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.8'
+APP_VERSION = '2.5.9'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -147,6 +147,7 @@ def _select_state_dir() -> str:
 STATE_DIR = _select_state_dir()
 CONFIG_PATH = os.path.join(STATE_DIR, 'config.json')
 SEEN_PATH = os.path.join(STATE_DIR, 'seen.json')
+_VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 
 # Palette (align with main app)
 BG_DARK = '#0d0d18'
@@ -202,6 +203,17 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     _ensure_state_dir()
     _atomic_write(CONFIG_PATH, json.dumps(cfg, indent=2, ensure_ascii=False))
+
+
+def _normalize_resolution_pref(cfg: dict) -> str:
+    pref = cfg.get('resolution')
+    if isinstance(pref, str):
+        pref = pref.strip().lower()
+        if pref in _VALID_RESOLUTION_PREFS:
+            return pref
+    if 'resolution' not in cfg:
+        return 'lowest' if cfg.get('prefer_lowest_res', False) else 'highest'
+    return 'highest'
 
 
 def load_seen() -> dict:
@@ -780,6 +792,9 @@ class SmallToolApp(tk.Tk):
         self.configure(bg=BG_DARK)
 
         self._cfg = load_config()
+        self._cfg['resolution'] = _normalize_resolution_pref(self._cfg)
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        set_resolution_pref(self._cfg['resolution'])
         self._log_queue: list[str] = []
         self._log_lock = threading.Lock()
         self._is_closing = False
@@ -872,7 +887,7 @@ class SmallToolApp(tk.Tk):
             'folder': self._folder_var.get() if hasattr(self, '_folder_var') else self._cfg.get('output_folder', ''),
             'baseline_date': self._date_var.get() if hasattr(self, '_date_var') else self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE),
             'selected_targets': self._get_selected_targets() if self._check_vars else self._cfg.get('selected_targets', []),
-            'prefer_lowest_res': self._cfg.get('prefer_lowest_res', False),
+            'resolution': self._cfg.get('resolution', 'highest'),
             'running': self._worker.is_running(),
             'check_now_state': check_state,
             'status_key': self._status_key,
@@ -882,7 +897,9 @@ class SmallToolApp(tk.Tk):
     def _restore_ui_state(self, snapshot: dict):
         self._cfg['output_folder'] = snapshot['folder']
         self._cfg['baseline_date'] = snapshot['baseline_date']
-        self._cfg['prefer_lowest_res'] = snapshot['prefer_lowest_res']
+        self._cfg['resolution'] = snapshot['resolution']
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        set_resolution_pref(snapshot['resolution'])
         self._folder_var.set(snapshot['folder'])
         self._date_var.set(snapshot['baseline_date'])
         self._res_var.set(self._resolution_label())
@@ -926,7 +943,24 @@ class SmallToolApp(tk.Tk):
             self._rebuilding = False
 
     def _resolution_label(self) -> str:
-        return T('st_resolution_lowest') if self._cfg.get('prefer_lowest_res', False) else T('st_resolution_highest')
+        pref = self._cfg.get('resolution', 'highest')
+        if pref == 'lowest':
+            return T('st_resolution_lowest')
+        if pref in {'1080', '720', '480', '360'}:
+            return f'{pref}p'
+        return T('st_resolution_highest')
+
+    def _resolution_values(self) -> list[str]:
+        return [T('st_resolution_highest'), '1080p', '720p', '480p', '360p',
+                T('st_resolution_lowest')]
+
+    def _resolution_pref_from_label(self, label) -> str:
+        label = str(label or '').strip()
+        if label == T('st_resolution_lowest'):
+            return 'lowest'
+        if label in {'1080p', '720p', '480p', '360p'}:
+            return label[:-1]
+        return 'highest'
 
     def _set_status_key(self, key: str, fg: str = TEXT_DIM):
         self._status_key = key
@@ -1039,7 +1073,7 @@ class SmallToolApp(tk.Tk):
         tk.Label(res_frame, text=T('st_resolution'), bg=BG_DARK, fg=TEXT_SEC,
                  font=(font_family, 10)).pack(side='left')
         self._res_var = tk.StringVar(value=self._resolution_label())
-        res_menu = tk.OptionMenu(res_frame, self._res_var, T('st_resolution_highest'), T('st_resolution_lowest'),
+        res_menu = tk.OptionMenu(res_frame, self._res_var, *self._resolution_values(),
                                  command=self._on_res_change)
         res_menu.configure(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
                            activeforeground=TEXT_PRI, relief='flat', bd=4,
@@ -1049,8 +1083,8 @@ class SmallToolApp(tk.Tk):
                                    font=(font_family, 10))
         res_menu.pack(side='left', padx=8)
         # Apply saved preference immediately (before auto-start)
-        from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
-        set_prefer_lowest_res(bool(self._cfg.get('prefer_lowest_res', False)))
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        set_resolution_pref(self._cfg.get('resolution', 'highest'))
 
         # ── Site / Category selection ───────────────────────────────
         sel_label = tk.Label(self, text=T('st_select_hint'),
@@ -1246,10 +1280,10 @@ class SmallToolApp(tk.Tk):
             self._log(T('st_folder_set', path=d))
 
     def _on_res_change(self, val):
-        from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
-        prefer_low = (val == T('st_resolution_lowest'))
-        set_prefer_lowest_res(prefer_low)
-        self._cfg['prefer_lowest_res'] = prefer_low
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        pref = self._resolution_pref_from_label(val)
+        set_resolution_pref(pref)
+        self._cfg['resolution'] = pref
         save_config(self._cfg)
 
     def _start_worker(self):

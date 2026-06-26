@@ -237,14 +237,72 @@ def _ffmpeg_safe_dir(path):
     return path
 
 # ── Resolution preference ──────────────────────────────────────────
-_prefer_lowest_res = False
+_VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
+_resolution_pref = 'highest'
+
+
+def set_resolution_pref(value) -> None:
+    global _resolution_pref
+    pref = str(value or '').strip().lower()
+    if pref in _VALID_RESOLUTION_PREFS:
+        _resolution_pref = pref
+
+
+def get_resolution_pref() -> str:
+    return _resolution_pref
+
 
 def set_prefer_lowest_res(value: bool) -> None:
-    global _prefer_lowest_res
-    _prefer_lowest_res = value
+    set_resolution_pref('lowest' if value else 'highest')
+
 
 def get_prefer_lowest_res() -> bool:
-    return _prefer_lowest_res
+    return _resolution_pref == 'lowest'
+
+
+def _variant_height_bw(playlist):
+    stream_info = getattr(playlist, 'stream_info', None)
+    height = None
+    resolution = getattr(stream_info, 'resolution', None) if stream_info else None
+    if isinstance(resolution, (tuple, list)) and len(resolution) == 2:
+        try:
+            height = int(resolution[1])
+        except (TypeError, ValueError):
+            height = None
+    try:
+        bandwidth = int(getattr(stream_info, 'bandwidth', 0) or 0) if stream_info else 0
+    except (TypeError, ValueError):
+        bandwidth = 0
+    return height, bandwidth
+
+
+def select_variant(playlists, pref):
+    items = [(playlist, *_variant_height_bw(playlist)) for playlist in (playlists or [])]
+    if not items:
+        return None
+
+    pref = str(pref or '').strip().lower()
+    if pref not in _VALID_RESOLUTION_PREFS:
+        pref = 'highest'
+
+    known = [item for item in items if item[1] is not None]
+    if pref == 'lowest':
+        if known:
+            return min(known, key=lambda item: (item[1], item[2]))[0]
+        return min(items, key=lambda item: item[2])[0]
+
+    if pref in {'1080', '720', '480', '360'}:
+        if not known:
+            return max(items, key=lambda item: item[2])[0]
+        target = int(pref)
+        at_or_below = [item for item in known if item[1] <= target]
+        if at_or_below:
+            return max(at_or_below, key=lambda item: (item[1], item[2]))[0]
+        return min(known, key=lambda item: (item[1], -item[2]))[0]
+
+    if known:
+        return max(known, key=lambda item: (item[1], item[2]))[0]
+    return max(items, key=lambda item: item[2])[0]
 
 
 def _get_session():
@@ -463,10 +521,9 @@ class M3U8Crawler:
         m3u8obj = self._load_m3u8(self._m3u8url)
         if len(m3u8obj.playlists) > 0:
             # Pick variant based on resolution preference
-            selector = min if _prefer_lowest_res else max
-            best = selector(m3u8obj.playlists,
-                            key=lambda p: p.stream_info.bandwidth if p.stream_info else 0)
-            m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
+            best = select_variant(m3u8obj.playlists, _resolution_pref)
+            if best:
+                m3u8obj, downloadurl = self._getm3u8PlayList(best.uri)
 
         # Extract key info (store bytes + IV, not a cipher - cipher is NOT thread-safe)
         self._key_content = None

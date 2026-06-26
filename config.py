@@ -17,6 +17,7 @@ MIRRORS = {
 _cf_lock = threading.Lock()
 _prefs_lock = threading.Lock()
 CF_OVERRIDES = {}
+VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 
 
 def _cf_store_path():
@@ -96,6 +97,28 @@ def set_ui_lang(code):
         with _prefs_lock:
             prefs = _load_prefs()
             prefs['lang'] = code
+            _save_prefs(prefs)
+    except Exception:
+        pass
+
+
+def get_resolution_pref():
+    pref = _load_prefs().get('resolution')
+    if isinstance(pref, str):
+        pref = pref.strip().lower()
+        if pref in VALID_RESOLUTION_PREFS:
+            return pref
+    return 'highest'
+
+
+def set_resolution_pref(pref):
+    pref = str(pref or '').strip().lower()
+    if pref not in VALID_RESOLUTION_PREFS:
+        pref = 'highest'
+    try:
+        with _prefs_lock:
+            prefs = _load_prefs()
+            prefs['resolution'] = pref
             _save_prefs(prefs)
     except Exception:
         pass

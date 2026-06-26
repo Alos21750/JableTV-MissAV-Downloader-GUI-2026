@@ -175,6 +175,7 @@ python main.py -nogui True
 
 ## 更新紀錄
 
+- **v2.5.9** — 修正 MissAV 畫質選擇問題（#21）：新增 1080p／720p／480p／360p 目標選項，保留無 RESOLUTION 清單的最高／最低頻寬行為，並讓現代版 GUI 的畫質設定可跨工作階段保存。
 - **v2.5.8** — 修正 MissAV 下載出現 `HTTP 403 Forbidden` 的問題（#20）：MissAV 的影片 CDN（surrit.com）已改用 Cloudflare 防護，原本以 Python 內建連線下載 m3u8／影片片段會被擋下（瀏覽縮圖正常、但一按下載就 403）。現在下載層（m3u8 播放清單、AES 金鑰、TS 片段、縮圖）改用與瀏覽頁面相同的 curl_cffi（Chrome TLS 指紋）連線，並在 CDN 被 Cloudflare 封鎖時顯示明確的「請改用 VPN/WARP」提示。JableTV／SupJav 下載不受影響。
 - **v2.5.7** — 修正大型下載佇列造成啟動凍結的問題（#19）；下載清單改為限制可見列數，並以有界方式載入 / 儲存可續傳佇列；設定頁新增儲存佇列卡片，可定位或清空 `%APPDATA%\JableTV Downloader\download_queue.csv`。
 

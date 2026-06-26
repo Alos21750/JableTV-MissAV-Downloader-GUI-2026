@@ -16,7 +16,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.5.8',
+        'version_label': 'v2.5.9',
         'by_author': 'by ALOS',
         'status_ready': '就緒',
         'site_label': '網站',
@@ -160,7 +160,7 @@ STRINGS = {
         'st_category': '分類',
         'st_status': '狀態',
         'st_log': '紀錄',
-        'st_resolution': '影片畫質:',
+        'st_resolution': '影片畫質 (1080p/720p/480p/360p):',
         'st_resolution_highest': '最高畫質',
         'st_resolution_lowest': '最低畫質（省流量）',
         'st_scan_running': '背景偵測執行中，請稍候',
@@ -176,7 +176,7 @@ STRINGS = {
 
         # Settings - resolution
         'resolution_setting': '影片畫質',
-        'resolution_desc': '選擇下載影片的解析度偏好（低畫質可省流量、加快下載）',
+        'resolution_desc': '選擇最高、1080p、720p、480p、360p 或最低畫質下載',
         'resolution_highest': '最高畫質',
         'resolution_lowest': '最低畫質（省流量）',
 
@@ -189,7 +189,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'Downloader',
-        'version_label': 'v2.5.8',
+        'version_label': 'v2.5.9',
         'by_author': 'by ALOS',
         'status_ready': 'Ready',
         'site_label': 'Site',
@@ -334,7 +334,7 @@ STRINGS = {
         'st_category': 'Category',
         'st_status': 'Status',
         'st_log': 'Log',
-        'st_resolution': 'Video Quality:',
+        'st_resolution': 'Video Quality (1080p/720p/480p/360p):',
         'st_resolution_highest': 'Highest Quality',
         'st_resolution_lowest': 'Lowest Quality (Saving Mode)',
         'st_scan_running': 'Background scan is already running; please wait.',
@@ -350,7 +350,7 @@ STRINGS = {
 
         # Settings - resolution
         'resolution_setting': 'Video Quality',
-        'resolution_desc': 'Choose download resolution preference (lowest saves bandwidth)',
+        'resolution_desc': 'Choose Highest, 1080p, 720p, 480p, 360p, or Lowest for downloads',
         'resolution_highest': 'Highest Quality',
         'resolution_lowest': 'Lowest Quality (Saving Mode)',
 
@@ -363,7 +363,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': '下载器',
-        'version_label': 'v2.5.8',
+        'version_label': 'v2.5.9',
         'by_author': 'by ALOS',
         'status_ready': '就绪',
         'site_label': '网站',
@@ -507,7 +507,7 @@ STRINGS = {
         'st_category': '分类',
         'st_status': '状态',
         'st_log': '日志',
-        'st_resolution': '视频画质:',
+        'st_resolution': '视频画质 (1080p/720p/480p/360p):',
         'st_resolution_highest': '最高画质',
         'st_resolution_lowest': '最低画质（省流量）',
         'st_scan_running': '后台监测正在运行，请稍候',
@@ -523,7 +523,7 @@ STRINGS = {
 
         # Settings - resolution
         'resolution_setting': '视频画质',
-        'resolution_desc': '选择下载视频的清晰度偏好（低画质可省流量、加快下载）',
+        'resolution_desc': '选择最高、1080p、720p、480p、360p 或最低画质下载',
         'resolution_highest': '最高画质',
         'resolution_lowest': '最低画质（省流量）',
 
@@ -536,7 +536,7 @@ STRINGS = {
         # Header
         'app_brand_1': 'JableTV · MissAV · SupJav',
         'app_brand_2': 'ダウンローダー',
-        'version_label': 'v2.5.8',
+        'version_label': 'v2.5.9',
         'by_author': 'by ALOS',
         'status_ready': '準備完了',
         'site_label': 'サイト',
@@ -681,7 +681,7 @@ STRINGS = {
         'st_category': 'カテゴリ',
         'st_status': '状態',
         'st_log': 'ログ',
-        'st_resolution': '動画画質:',
+        'st_resolution': '動画画質 (1080p/720p/480p/360p):',
         'st_resolution_highest': '最高画質',
         'st_resolution_lowest': '最低画質（通信量を節約）',
         'st_scan_running': 'バックグラウンド監視を実行中です。しばらくお待ちください。',
@@ -697,7 +697,7 @@ STRINGS = {
 
         # Settings - resolution
         'resolution_setting': '画質',
-        'resolution_desc': 'ダウンロードする動画の解像度設定を選択します（低画質は通信量を節約できます）',
+        'resolution_desc': '最高、1080p、720p、480p、360p、最低からダウンロード画質を選択します',
         'resolution_highest': '最高画質',
         'resolution_lowest': '最低画質（節約モード）',
 

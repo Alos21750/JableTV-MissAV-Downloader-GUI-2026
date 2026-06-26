@@ -545,6 +545,9 @@ class ModernApp(ctk.CTk):
                     pass
         self._dlmgr.load_csv(CSV_PATH)
 
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        set_resolution_pref(config.get_resolution_pref())
+
         self._build_ui()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
 
@@ -692,11 +695,25 @@ class ModernApp(ctk.CTk):
         return T('unlimited') if self._speed_mbps == 0 else f'{int(self._speed_mbps)} MB/s'
 
     def _resolution_values(self):
-        return [T('resolution_highest'), T('resolution_lowest')]
+        return [T('resolution_highest'), '1080p', '720p', '480p', '360p',
+                T('resolution_lowest')]
+
+    def _resolution_pref_from_label(self, label):
+        label = str(label or '').strip()
+        if label == T('resolution_lowest'):
+            return 'lowest'
+        if label in {'1080p', '720p', '480p', '360p'}:
+            return label[:-1]
+        return 'highest'
 
     def _resolution_label(self):
-        from M3U8Sites.M3U8Crawler import get_prefer_lowest_res
-        return T('resolution_lowest') if get_prefer_lowest_res() else T('resolution_highest')
+        from M3U8Sites.M3U8Crawler import get_resolution_pref
+        pref = get_resolution_pref()
+        if pref == 'lowest':
+            return T('resolution_lowest')
+        if pref in {'1080', '720', '480', '360'}:
+            return f'{pref}p'
+        return T('resolution_highest')
 
     def _on_lang_change(self, display_name):
         code = self._lang_code_by_name.get(display_name)
@@ -715,7 +732,7 @@ class ModernApp(ctk.CTk):
 
     def _apply_language(self, code):
         self._rebuilding = True
-        from M3U8Sites.M3U8Crawler import get_prefer_lowest_res, set_prefer_lowest_res
+        from M3U8Sites.M3U8Crawler import get_resolution_pref, set_resolution_pref
 
         try:
             snapshot = {
@@ -728,7 +745,7 @@ class ModernApp(ctk.CTk):
                 'page_jump': self._var_get('_page_jump_var'),
                 'concurrency': self._dlmgr.max_concurrent,
                 'speed_mbps': self._speed_mbps,
-                'prefer_lowest_res': get_prefer_lowest_res(),
+                'resolution_pref': get_resolution_pref(),
                 'site_key': self._site_key,
             }
 
@@ -767,7 +784,7 @@ class ModernApp(ctk.CTk):
             self._url_input = snapshot['dl_url']
             self._site_key = snapshot['site_key']
             self._speed_mbps = snapshot['speed_mbps']
-            set_prefer_lowest_res(snapshot['prefer_lowest_res'])
+            set_resolution_pref(snapshot['resolution_pref'])
 
             self._build_ui()
 
@@ -811,7 +828,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.8  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.9  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -1412,7 +1429,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.8',
+        ctk.CTkLabel(ver_badge, text='v2.5.9',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -2058,8 +2075,10 @@ class ModernApp(ctk.CTk):
         speed_limiter.set_limit(mbps)
 
     def _on_res_change(self, val):
-        from M3U8Sites.M3U8Crawler import set_prefer_lowest_res
-        set_prefer_lowest_res(val == T('resolution_lowest'))
+        from M3U8Sites.M3U8Crawler import set_resolution_pref
+        pref = self._resolution_pref_from_label(val)
+        set_resolution_pref(pref)
+        config.set_resolution_pref(pref)
 
     def _on_conc_change(self, val):
         self._dlmgr.max_concurrent = int(val)
