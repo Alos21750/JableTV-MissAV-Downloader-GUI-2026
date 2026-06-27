@@ -5,6 +5,27 @@
 import ctypes
 import sys
 
+# --- issue #23: on some Windows machines the OpenSSL/cert default path contains
+# non-UTF-8 bytes, so ssl.get_default_verify_paths() raises (UnicodeDecodeError ->
+# SystemError) and crashes curl_cffi at import time. Point SSL/curl_cffi at certifi's
+# ASCII-safe bundle BEFORE anything imports curl_cffi, and harden the function. ---
+import os as _os, ssl as _ssl
+try:
+    import certifi as _certifi
+    _ca = _certifi.where()
+    if _ca and _os.path.exists(_ca):
+        _os.environ.setdefault('SSL_CERT_FILE', _ca)
+        _os.environ.setdefault('SSL_CERT_DIR', _os.path.dirname(_ca))
+        try:
+            _ssl.get_default_verify_paths()
+        except (UnicodeDecodeError, SystemError):
+            _dvp = _ssl.DefaultVerifyPaths(_ca, _os.path.dirname(_ca),
+                                           'SSL_CERT_FILE', _ca,
+                                           'SSL_CERT_DIR', _os.path.dirname(_ca))
+            _ssl.get_default_verify_paths = lambda: _dvp
+except Exception:
+    pass
+
 # Enable DPI awareness BEFORE any Tk/GUI imports
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-monitor V2

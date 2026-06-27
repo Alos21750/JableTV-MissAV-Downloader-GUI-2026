@@ -32,6 +32,25 @@ except Exception:
     except Exception:
         pass
 
+# --- issue #23: harden the SSL cert path before curl_cffi (pulled in by M3U8Sites)
+# imports, so a non-UTF-8 OpenSSL/cert default path can't crash startup. ---
+import os as _os, ssl as _ssl
+try:
+    import certifi as _certifi
+    _ca = _certifi.where()
+    if _ca and _os.path.exists(_ca):
+        _os.environ.setdefault('SSL_CERT_FILE', _ca)
+        _os.environ.setdefault('SSL_CERT_DIR', _os.path.dirname(_ca))
+        try:
+            _ssl.get_default_verify_paths()
+        except (UnicodeDecodeError, SystemError):
+            _dvp = _ssl.DefaultVerifyPaths(_ca, _os.path.dirname(_ca),
+                                           'SSL_CERT_FILE', _ca,
+                                           'SSL_CERT_DIR', _os.path.dirname(_ca))
+            _ssl.get_default_verify_paths = lambda: _dvp
+except Exception:
+    pass
+
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
@@ -49,7 +68,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.9'
+APP_VERSION = '2.5.10'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
