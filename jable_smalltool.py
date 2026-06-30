@@ -51,6 +51,13 @@ try:
 except Exception:
     pass
 
+# issue #24: global crash logger -> crash_log.txt + copyable dialog
+try:
+    import crashlog
+    crashlog.install()
+except Exception:
+    pass
+
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
@@ -68,7 +75,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.10'
+APP_VERSION = '2.5.11'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)

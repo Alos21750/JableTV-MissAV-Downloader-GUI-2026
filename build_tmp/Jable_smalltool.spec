@@ -6,7 +6,7 @@ binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
     'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
-    'curl_cffi', '_cffi_backend',
+    'curl_cffi', '_cffi_backend', 'crashlog', 'certifi',
 ]
 
 for pkg in ['cloudscraper', 'certifi', 'curl_cffi', 'imageio_ffmpeg']:
@@ -16,7 +16,7 @@ for pkg in ['cloudscraper', 'certifi', 'curl_cffi', 'imageio_ffmpeg']:
 
 a = Analysis(
     ['..\\jable_smalltool.py'],
-    pathex=[],
+    pathex=['..'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

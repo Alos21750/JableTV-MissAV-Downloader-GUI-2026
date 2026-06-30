@@ -26,6 +26,15 @@ try:
 except Exception:
     pass
 
+# --- issue #24: install a global crash logger so an uncaught exception (which
+# otherwise just makes the pythonw window vanish silently) is written to
+# crash_log.txt next to the exe + shown in a copyable dialog, so users can report it. ---
+try:
+    import crashlog
+    crashlog.install()
+except Exception:
+    pass
+
 # Enable DPI awareness BEFORE any Tk/GUI imports
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-monitor V2

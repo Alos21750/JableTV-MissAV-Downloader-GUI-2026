@@ -7,6 +7,7 @@ hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
     'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
     'customtkinter', 'curl_cffi', '_cffi_backend',
+    'crashlog', 'certifi',
 ]
 
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
@@ -17,7 +18,7 @@ for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi', 'imageio_ff
 
 a = Analysis(
     ['..\\main.py'],
-    pathex=[],
+    pathex=['..'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
