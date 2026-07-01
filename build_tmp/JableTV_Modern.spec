@@ -7,7 +7,7 @@ hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
     'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
     'customtkinter', 'curl_cffi', '_cffi_backend',
-    'crashlog', 'certifi', 'faulthandler', 'updater',
+    'crashlog', 'certifi', 'faulthandler', 'updater', 'ssl_util',
 ]
 
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)

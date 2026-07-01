@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import requests
+from ssl_util import SharedSSLAdapter, get_shared_ssl_context
 try:
     from curl_cffi import requests as _cffi_requests
     _use_cffi = True
@@ -36,6 +37,7 @@ default_max_workers = min(os.cpu_count() * 2, 16) if os.cpu_count() else 8
 
 _session_lock = threading.Lock()
 _session = None
+get_shared_ssl_context()
 
 _active_host = {}                 # sticky per-process working host per site_key
 _active_host_lock = threading.Lock()
@@ -311,13 +313,18 @@ def _get_session():
         with _session_lock:
             if _session is None:
                 _session = requests.Session()
-                adapter = requests.adapters.HTTPAdapter(
+                http_adapter = requests.adapters.HTTPAdapter(
                     pool_connections=32,
                     pool_maxsize=64,
                     max_retries=2,
                 )
-                _session.mount('http://', adapter)
-                _session.mount('https://', adapter)
+                https_adapter = SharedSSLAdapter(
+                    pool_connections=32,
+                    pool_maxsize=64,
+                    max_retries=2,
+                )
+                _session.mount('http://', http_adapter)
+                _session.mount('https://', https_adapter)
     return _session
 
 

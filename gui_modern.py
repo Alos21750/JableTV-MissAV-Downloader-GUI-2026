@@ -9,7 +9,6 @@ import io
 import csv
 import time
 import shutil
-import ssl
 import webbrowser
 import threading
 import concurrent.futures
@@ -20,12 +19,12 @@ from typing import Optional
 import customtkinter as ctk
 import requests
 from PIL import Image
-from urllib3.poolmanager import PoolManager
 
 import config
 import M3U8Sites
 import site_i18n
 import updater
+from ssl_util import SharedSSLAdapter, get_shared_ssl_context
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
 from M3U8Sites.SiteSupJav import SupJavBrowser
@@ -33,7 +32,7 @@ from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 
-APP_VERSION = '2.5.17'
+APP_VERSION = '2.5.18'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -448,36 +447,10 @@ def fetch_page_data(browser_cls, url: str) -> dict:
 
 
 # ── Thumbnail loader ────────────────────────────────────────────────
-_SHARED_SSL_CTX = None
-_ssl_ctx_lock = threading.Lock()
 _thumb_session: Optional[requests.Session] = None
 _thumb_lock = threading.Lock()
 _thumb_cache: dict = {}   # url -> PIL.Image (raw, not CTkImage; Tk root needed)
 _THUMB_SIZE = (260, 146)  # 16:9 at 260px wide
-
-
-def _get_shared_ssl_context():
-    global _SHARED_SSL_CTX
-    if _SHARED_SSL_CTX is None:
-        with _ssl_ctx_lock:
-            if _SHARED_SSL_CTX is None:
-                try:
-                    import certifi
-                    _SHARED_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-                except Exception:
-                    _SHARED_SSL_CTX = ssl.create_default_context()
-    return _SHARED_SSL_CTX
-
-
-class _SharedSSLAdapter(requests.adapters.HTTPAdapter):
-    def init_poolmanager(self, connections, maxsize, block=False, **kw):
-        kw['ssl_context'] = _get_shared_ssl_context()
-        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize,
-                                       block=block, **kw)
-
-    def proxy_manager_for(self, proxy, **kw):
-        kw['ssl_context'] = _get_shared_ssl_context()
-        return super().proxy_manager_for(proxy, **kw)
 
 
 def _get_thumb_session() -> requests.Session:
@@ -488,8 +461,8 @@ def _get_thumb_session() -> requests.Session:
                 s = requests.Session()
                 s.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8,
                                                                  pool_maxsize=32))
-                s.mount('https://', _SharedSSLAdapter(pool_connections=8,
-                                                      pool_maxsize=32))
+                s.mount('https://', SharedSSLAdapter(pool_connections=8,
+                                                     pool_maxsize=32))
                 _thumb_session = s
     return _thumb_session
 
@@ -523,7 +496,7 @@ class ModernApp(ctk.CTk):
     def __init__(self, url: str = '', dest: str = 'download', lang: str = 'en'):
         super().__init__()
 
-        _get_shared_ssl_context()
+        get_shared_ssl_context()
 
         config.load_cf_overrides()
         self._lang_code_by_name = {name: code for code, name in LANGUAGES}

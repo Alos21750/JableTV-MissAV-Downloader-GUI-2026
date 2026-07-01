@@ -8,6 +8,7 @@ import tkinter.ttk as ttk
 import requests
 from PIL import ImageTk, Image
 from config import headers
+from ssl_util import SharedSSLAdapter
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
 
@@ -45,10 +46,14 @@ def _get_thumb_session():
         with _thumb_lock:
             if _thumb_session is None:
                 _thumb_session = requests.Session()
-                a = requests.adapters.HTTPAdapter(pool_connections=8,
-                                                  pool_maxsize=32)
-                _thumb_session.mount('http://', a)
-                _thumb_session.mount('https://', a)
+                _thumb_session.mount('http://', requests.adapters.HTTPAdapter(
+                    pool_connections=8,
+                    pool_maxsize=32,
+                ))
+                _thumb_session.mount('https://', SharedSSLAdapter(
+                    pool_connections=8,
+                    pool_maxsize=32,
+                ))
     return _thumb_session
 
 
