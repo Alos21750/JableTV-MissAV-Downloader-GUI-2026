@@ -1,10 +1,19 @@
 # coding: utf-8
-"""Global crash logging for the frozen GUI builds (issue #24).
+"""Global crash logging for the frozen GUI builds (issues #24).
 
-A GUI app launched via pythonw has no console, so any uncaught exception just
-makes the window vanish with no information. install() routes uncaught
-exceptions (main thread + background threads) to a crash_log.txt next to the
-exe and shows a copyable error dialog, so users can report what actually broke.
+A GUI app launched via pythonw has no console, so a crash just makes the window
+vanish with no information. Two kinds of crash need two mechanisms:
+
+  * Python-level uncaught exceptions  -> sys.excepthook / threading.excepthook
+    -> crash_log.txt + a copyable dialog.
+  * NATIVE fatal errors (segfault / Windows access-violation / C-level abort in
+    Tk, PIL, curl_cffi, a DLL, ...) -> these BYPASS sys.excepthook entirely and
+    leave no Python traceback (issue #24: user got a silent crash with an EMPTY
+    crash_log). For those we arm faulthandler, which installs C-level fault
+    handlers and dumps every thread's Python stack to crash_native.log.
+
+We also drop breadcrumbs (breadcrumb()) so even a hard crash tells us how far
+startup got (categories loaded? page loaded? thumbnails?).
 """
 import os
 import sys
@@ -12,19 +21,30 @@ import threading
 import traceback
 from datetime import datetime
 
+_fault_file = None   # kept open for the process lifetime so faulthandler can write on crash
 
-def _log_path():
-    # next to the .exe when frozen, else next to this file
+
+def _base_dir():
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
     else:
         base = os.path.dirname(os.path.abspath(__file__))
     try:
-        if not os.access(base, os.W_OK):
-            raise OSError
+        probe = os.path.join(base, ".w_test_%d" % os.getpid())
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
     except Exception:
         base = os.path.expanduser("~")
-    return os.path.join(base, "crash_log.txt")
+    return base
+
+
+def _path(name="crash_log.txt"):
+    return os.path.join(_base_dir(), name)
+
+
+def _log_path():
+    return _path("crash_log.txt")
 
 
 def _app_version():
@@ -48,11 +68,42 @@ def _write(kind, exc_type, exc_value, exc_tb):
             + "source : %s\n" % kind
             + "-" * 70 + "\n"
         )
-        with open(_log_path(), "a", encoding="utf-8") as f:
+        with open(_path("crash_log.txt"), "a", encoding="utf-8") as f:
             f.write(header + tb + "\n")
         return tb
     except Exception:
         return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+
+def breadcrumb(msg):
+    """Append a startup/progress marker. Cheap, flushed — so even a hard native
+    crash tells us how far the app got (issue #24: 'before or after thumbnails')."""
+    try:
+        with open(_path("startup.log"), "a", encoding="utf-8") as f:
+            f.write("%s  %s\n" % (datetime.now().strftime("%H:%M:%S.%f")[:-3], msg))
+    except Exception:
+        pass
+
+
+def _arm_faulthandler():
+    """Catch NATIVE fatal errors (segfault / access-violation / C-abort) that
+    bypass sys.excepthook and leave crash_log.txt empty. faulthandler dumps all
+    threads' Python stacks to crash_native.log at the moment of the fault."""
+    global _fault_file
+    try:
+        import faulthandler
+        # start a fresh native log each run so the user pastes only the last crash
+        _fault_file = open(_path("crash_native.log"), "w", encoding="utf-8")
+        _fault_file.write(
+            "JableTV native-fault log  ·  version %s  ·  python %s  ·  %s\n"
+            "(if this file has a traceback below, the app hit a NATIVE crash — "
+            "please paste it to the GitHub issue)\n%s\n"
+            % (_app_version(), sys.version.split()[0],
+               datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "-" * 60))
+        _fault_file.flush()
+        faulthandler.enable(file=_fault_file, all_threads=True)
+    except Exception:
+        pass
 
 
 def _show_dialog(tb):
@@ -90,6 +141,10 @@ def _show_dialog(tb):
 
 
 def install(show_dialog=True):
+    # native fatal errors (the #24 case: empty crash_log = not a Python exception)
+    _arm_faulthandler()
+    breadcrumb("crashlog installed (v%s, python %s)" % (_app_version(), sys.version.split()[0]))
+
     def hook(exc_type, exc_value, exc_tb):
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc_value, exc_tb)

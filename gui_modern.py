@@ -29,6 +29,13 @@ from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 
+# issue #24: startup breadcrumbs — no-op if crashlog unavailable
+try:
+    from crashlog import breadcrumb as _crumb
+except Exception:
+    def _crumb(msg):
+        pass
+
 # ── Design tokens ────────────────────────────────────────────────────
 ACCENT        = ('#DC3D43', '#E5484D')
 ACCENT_HOVER  = ('#C8323A', '#D43A40')
@@ -828,7 +835,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.11  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.12  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -1429,7 +1436,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.11',
+        ctk.CTkLabel(ver_badge, text='v2.5.12',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -1441,6 +1448,7 @@ class ModernApp(ctk.CTk):
     def _load_categories(self):
         if self._is_closing:
             return
+        _crumb("load_categories: site=%s" % self._site_key)
         self._page_req += 1
         my_req = self._page_req
         my_gen = self._build_gen
@@ -1555,7 +1563,9 @@ class ModernApp(ctk.CTk):
         if videos:
             self._last_loaded_page = page_snapshot
             self._page = page_snapshot
+        _crumb("apply_page: %d videos -> refresh_grid" % len(videos))
         self._refresh_grid()
+        _crumb("apply_page: grid refreshed")
         self._page_lbl.configure(text=T('page_n', n=self._page))
 
     def _refresh_grid(self):
@@ -2497,5 +2507,8 @@ class ModernApp(ctk.CTk):
 
 
 def gui_modern_main(url: str = '', dest: str = 'download', lang: str = 'en'):
+    _crumb("gui_modern_main: constructing ModernApp")
     app = ModernApp(url=url, dest=dest, lang=lang)
+    _crumb("gui_modern_main: app constructed, entering mainloop")
     app.mainloop()
+    _crumb("gui_modern_main: mainloop returned (normal exit)")
