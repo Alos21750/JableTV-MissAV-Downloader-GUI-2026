@@ -33,7 +33,7 @@ from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 
-APP_VERSION = '2.5.16'
+APP_VERSION = '2.5.17'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -575,6 +575,7 @@ class ModernApp(ctk.CTk):
         self._update_info = None
         self._update_checking = False
         self._update_installing = False
+        self._update_prompt_shown = False
         self._update_status_text = ''
         self._update_status_color = TEXT_DIM
         self._update_badge = None
@@ -716,6 +717,89 @@ class ModernApp(ctk.CTk):
                 return line[:180]
         return ''
 
+    def _show_update_prompt(self, info):
+        if self._is_closing or self._update_prompt_shown:
+            return
+        self._update_prompt_shown = True
+        prompt = None
+        try:
+            prompt = ctk.CTkToplevel(self)
+            prompt.title(T('update_prompt_title'))
+            prompt.configure(fg_color=BG_CARD)
+            prompt.resizable(False, False)
+            prompt.transient(self)
+
+            pos_width, pos_height = 420, 220
+            self.update_idletasks()
+            x = self.winfo_rootx() + max((self.winfo_width() - pos_width) // 2, 0)
+            y = self.winfo_rooty() + 80
+            x = max(min(x, self.winfo_screenwidth() - pos_width), 0)
+            y = max(min(y, self.winfo_screenheight() - pos_height), 0)
+
+            body = ctk.CTkFrame(prompt, fg_color=BG_CARD, corner_radius=0)
+            body.pack(fill='both', expand=True, padx=22, pady=20)
+
+            ctk.CTkLabel(
+                body, text=T('update_prompt_title'),
+                font=(ui_font(), 16, 'bold'), text_color=TEXT_PRI
+            ).pack(anchor='w')
+
+            tag = (info or {}).get('tag') or (info or {}).get('version')
+            ctk.CTkLabel(
+                body, text=T('update_available', version=tag),
+                font=(ui_font(), 12), text_color=TEXT_SEC,
+                wraplength=360, justify='left'
+            ).pack(anchor='w', pady=(12, 0))
+
+            note = self._short_update_note(info)
+            if note:
+                ctk.CTkLabel(
+                    body, text=note, font=(ui_font(), 10),
+                    text_color=TEXT_DIM, wraplength=360, justify='left'
+                ).pack(anchor='w', pady=(8, 0))
+
+            row = ctk.CTkFrame(body, fg_color='transparent')
+            row.pack(fill='x', pady=(18, 0))
+
+            def _close():
+                try:
+                    prompt.destroy()
+                except tk.TclError:
+                    pass
+
+            def _install():
+                _close()
+                self._start_update_install()
+
+            later_btn = ctk.CTkButton(
+                row, text=T('update_prompt_later'), width=118, height=34,
+                corner_radius=8, fg_color='transparent', border_width=1,
+                border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+                text_color=TEXT_PRI, command=_close)
+
+            update_btn = ctk.CTkButton(
+                row, text=T('update_now_btn'), width=118, height=34,
+                corner_radius=8, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                text_color=('#FFFFFF', '#FFFFFF'), command=_install
+            )
+            update_btn.pack(side='right')
+            later_btn.pack(side='right', padx=(0, 8))
+
+            prompt.protocol('WM_DELETE_WINDOW', _close)
+            prompt.bind('<Escape>', lambda _event: _close())
+            prompt.update_idletasks()
+            prompt.geometry(f'+{x}+{y}')
+            prompt.deiconify()
+            prompt.lift()
+            prompt.focus_force()
+            later_btn.focus_force()
+        except Exception:
+            if prompt is not None:
+                try:
+                    prompt.destroy()
+                except tk.TclError:
+                    pass
+
     def _set_update_status(self, text, color=None):
         self._update_status_text = text
         self._update_status_color = color or TEXT_DIM
@@ -798,6 +882,8 @@ class ModernApp(ctk.CTk):
                     tag = info.get('tag') or info.get('version')
                     self._set_update_status(
                         T('update_available', version=tag), SUCCESS)
+                    if not manual and not self._update_prompt_shown:
+                        self._show_update_prompt(info)
                 elif manual:
                     self._update_info = None
                     self._set_update_status(T('update_uptodate'), TEXT_SEC)
