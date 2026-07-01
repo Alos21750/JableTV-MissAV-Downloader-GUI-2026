@@ -6,7 +6,7 @@ binaries = []
 hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
     'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
-    'curl_cffi', '_cffi_backend', 'crashlog', 'certifi', 'faulthandler',
+    'curl_cffi', '_cffi_backend', 'crashlog', 'certifi', 'faulthandler', 'updater',
 ]
 
 for pkg in ['cloudscraper', 'certifi', 'curl_cffi', 'imageio_ffmpeg']:

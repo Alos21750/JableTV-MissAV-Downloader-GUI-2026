@@ -10,6 +10,7 @@ import csv
 import time
 import shutil
 import ssl
+import webbrowser
 import threading
 import concurrent.futures
 import tkinter as tk
@@ -24,12 +25,15 @@ from urllib3.poolmanager import PoolManager
 import config
 import M3U8Sites
 import site_i18n
+import updater
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
 from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
+
+APP_VERSION = '2.5.16'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -568,6 +572,16 @@ class ModernApp(ctk.CTk):
         self._speed_mbps = 0.0
         self._download_autosave_ticks = 0
         self._last_download_save_sig = None
+        self._update_info = None
+        self._update_checking = False
+        self._update_installing = False
+        self._update_status_text = ''
+        self._update_status_color = TEXT_DIM
+        self._update_badge = None
+        self._update_status_lbl = None
+        self._update_note_lbl = None
+        self._update_check_btn = None
+        self._update_now_btn = None
 
         # Download manager
         self._dlmgr = DownloadManager(max_concurrent=DEFAULT_CONCURRENT)
@@ -587,6 +601,7 @@ class ModernApp(ctk.CTk):
 
         self._build_ui()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self._start_update_check(manual=False)
 
         # Start periodic refresh for downloads
         self._refresh_downloads()
@@ -692,6 +707,160 @@ class ModernApp(ctk.CTk):
             self.after(0, _run)
         except tk.TclError:
             pass
+
+    def _short_update_note(self, info):
+        notes = (info or {}).get('notes') or ''
+        for line in notes.splitlines():
+            line = line.strip()
+            if line:
+                return line[:180]
+        return ''
+
+    def _set_update_status(self, text, color=None):
+        self._update_status_text = text
+        self._update_status_color = color or TEXT_DIM
+        self._refresh_update_ui()
+
+    def _refresh_update_ui(self):
+        available = bool(self._update_info)
+        status = self._update_status_text or T('update_idle')
+        if self._update_status_lbl is not None:
+            try:
+                self._update_status_lbl.configure(
+                    text=status, text_color=self._update_status_color)
+            except tk.TclError:
+                pass
+        if self._update_note_lbl is not None:
+            try:
+                if available:
+                    note = self._short_update_note(self._update_info)
+                    tag = self._update_info.get('tag') or self._update_info.get('version')
+                    text = T('update_available', version=tag)
+                    if note:
+                        text = f'{text}  {note}'
+                    self._update_note_lbl.configure(text=text)
+                else:
+                    self._update_note_lbl.configure(text='')
+            except tk.TclError:
+                pass
+        if self._update_check_btn is not None:
+            try:
+                self._update_check_btn.configure(
+                    state='disabled' if self._update_checking else 'normal')
+            except tk.TclError:
+                pass
+        if self._update_now_btn is not None:
+            try:
+                if available:
+                    if not self._update_now_btn.winfo_manager():
+                        self._update_now_btn.pack(side='left', padx=(8, 0))
+                    self._update_now_btn.configure(
+                        state='disabled' if self._update_installing else 'normal')
+                else:
+                    self._update_now_btn.configure(state='disabled')
+                    self._update_now_btn.pack_forget()
+            except tk.TclError:
+                pass
+        if self._update_badge is not None:
+            try:
+                if available:
+                    if not self._update_badge.winfo_manager():
+                        self._update_badge.pack(side='left', padx=(8, 0))
+                else:
+                    self._update_badge.pack_forget()
+            except tk.TclError:
+                pass
+
+    def _start_update_check(self, manual=False):
+        if self._is_closing or self._update_checking:
+            return
+        self._update_checking = True
+        if manual:
+            self._set_update_status(T('update_checking'), TEXT_SEC)
+        else:
+            self._refresh_update_ui()
+
+        def _worker():
+            info = None
+            newer = False
+            try:
+                info = updater.check_latest()
+                newer = bool(info and updater.is_newer(
+                    info.get('version', ''), APP_VERSION))
+            except Exception:
+                info = None
+                newer = False
+
+            def _apply():
+                self._update_checking = False
+                if newer:
+                    self._update_info = info
+                    tag = info.get('tag') or info.get('version')
+                    self._set_update_status(
+                        T('update_available', version=tag), SUCCESS)
+                elif manual:
+                    self._update_info = None
+                    self._set_update_status(T('update_uptodate'), TEXT_SEC)
+                elif info is not None:
+                    self._update_info = None
+                    self._refresh_update_ui()
+                else:
+                    if manual:
+                        self._set_update_status(T('update_failed'), ERROR_C)
+                    else:
+                        self._refresh_update_ui()
+
+            self._ui(_apply)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_update_install(self):
+        info = self._update_info
+        if self._is_closing or self._update_installing or not info:
+            return
+        if not updater.is_frozen():
+            try:
+                webbrowser.open(info.get('html_url') or updater.API_LATEST)
+            except Exception:
+                pass
+            self._set_update_status(T('update_from_source'), WARNING)
+            return
+
+        name = updater.current_exe_name()
+        url = (info.get('assets') or {}).get(name)
+        if not url:
+            self._set_update_status(T('update_failed'), ERROR_C)
+            return
+
+        self._update_installing = True
+        self._set_update_status(T('update_downloading', pct=0), TEXT_SEC)
+
+        def _worker():
+            exe_dir = os.path.dirname(sys.executable)
+            new_path = os.path.join(exe_dir, name + '.new')
+
+            def _progress(downloaded, total):
+                pct = int(downloaded * 100 / total) if total else 0
+                self._ui(lambda p=pct: self._set_update_status(
+                    T('update_downloading', pct=p), TEXT_SEC))
+
+            ok = updater.download_asset(url, new_path, progress_cb=_progress)
+            if ok and updater.apply_update_and_restart(new_path):
+                self._ui(lambda: self._set_update_status(
+                    T('update_restarting'), SUCCESS))
+                self._ui(self._on_close)
+                return
+
+            def _failed():
+                self._update_installing = False
+                self._set_update_status(T('update_failed'), ERROR_C)
+
+            self._ui(_failed)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _show_update_settings(self, event=None):
+        self._select_tab('settings')
 
     # ── Build UI ─────────────────────────────────────────────────────
     def _theme_glyph(self):
@@ -873,9 +1042,19 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.15  |  by ALOS',
+        version_box = ctk.CTkFrame(right_info, fg_color='transparent')
+        version_box.pack(side='right')
+        ctk.CTkLabel(version_box, text=f'v{APP_VERSION}  |  by ALOS',
                      font=('Consolas', 10),
-                     text_color=TEXT_DIM).pack(side='right')
+                     text_color=TEXT_DIM).pack(side='left')
+        self._update_badge = ctk.CTkLabel(
+            version_box, text=T('update_new_badge'),
+            font=(ui_font(), 10, 'bold'), text_color=ACCENT)
+        try:
+            self._update_badge.configure(cursor='hand2')
+        except Exception:
+            pass
+        self._update_badge.bind('<Button-1>', self._show_update_settings)
         self._theme_btn = ctk.CTkButton(
             right_info, text=self._theme_glyph(), width=34, height=34,
             corner_radius=8, fg_color=BG_CARD, border_width=1,
@@ -1206,6 +1385,50 @@ class ModernApp(ctk.CTk):
             scrollbar_button_hover_color=BORDER_HOVER)
         self._dl_scroll.pack(fill='both', expand=True)
 
+    def _build_update_card(self, content):
+        upd = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+                           border_width=1, border_color=BORDER_CARD)
+        upd.pack(fill='x', pady=(0, 16))
+
+        upd_hdr = ctk.CTkFrame(upd, fg_color='transparent')
+        upd_hdr.pack(fill='x', padx=20, pady=(16, 12))
+        ctk.CTkLabel(upd_hdr, text=T('update_card_title'),
+                     font=(ui_font(), 14, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+
+        ctk.CTkFrame(upd, height=1, fg_color=BORDER).pack(fill='x', padx=20)
+
+        row_info = ctk.CTkFrame(upd, fg_color='transparent')
+        row_info.pack(fill='x', padx=20, pady=(16, 4))
+        ctk.CTkLabel(row_info, text=T('update_current', version=APP_VERSION),
+                     font=(ui_font(), 11),
+                     text_color=TEXT_PRI).pack(side='left')
+
+        self._update_status_lbl = ctk.CTkLabel(
+            upd, text='', text_color=TEXT_DIM, font=(ui_font(), 10))
+        self._update_status_lbl.pack(anchor='w', padx=20, pady=(2, 4))
+
+        self._update_note_lbl = ctk.CTkLabel(
+            upd, text='', text_color=TEXT_DIM, font=(ui_font(), 9),
+            wraplength=760, justify='left')
+        self._update_note_lbl.pack(anchor='w', padx=20, pady=(0, 8))
+
+        row_actions = ctk.CTkFrame(upd, fg_color='transparent')
+        row_actions.pack(fill='x', padx=20, pady=(4, 18))
+        self._update_check_btn = ctk.CTkButton(
+            row_actions, text=T('update_check_btn'), width=130, height=34,
+            corner_radius=8, fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI,
+            command=lambda: self._start_update_check(manual=True))
+        self._update_check_btn.pack(side='left')
+        self._update_now_btn = ctk.CTkButton(
+            row_actions, text=T('update_now_btn'), width=110, height=34,
+            corner_radius=8, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=('#FFFFFF', '#FFFFFF'),
+            command=self._start_update_install)
+        self._refresh_update_ui()
+
     # ── Settings Tab ─────────────────────────────────────────────────
     def _build_settings_tab(self):
         tab = self._tab_frames['settings']
@@ -1229,6 +1452,8 @@ class ModernApp(ctk.CTk):
         ctk.CTkLabel(title_row, text=T('settings_desc'),
                      font=(ui_font(), 10),
                      text_color=TEXT_DIM).pack(side='left', padx=(16, 0))
+
+        self._build_update_card(content)
 
         # ── Download Settings Card ──────────────────────────────────
         grp = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
@@ -1474,7 +1699,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.15',
+        ctk.CTkLabel(ver_badge, text=f'v{APP_VERSION}',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
@@ -1606,6 +1831,18 @@ class ModernApp(ctk.CTk):
         _crumb("apply_page: grid refreshed")
         self._page_lbl.configure(text=T('page_n', n=self._page))
 
+    def _video_version_badge(self, url: str, title: str):
+        url_l = (url or '').lower()
+        title_l = (title or '').lower()
+        path = url_l.split('?', 1)[0].rstrip('/')
+        if ('uncensored-leak' in url_l or '無碼' in title_l or
+                '无码' in title_l or 'uncensored' in title_l):
+            return '無碼', '#C2410C'
+        if ('chinese-subtitle' in url_l or path.endswith('-c') or
+                '-c/' in url_l or '中文字幕' in title_l or '中字' in title_l):
+            return '中字', '#0E7490'
+        return None
+
     def _refresh_grid(self):
         try:
             for w in self._grid_scroll.winfo_children():
@@ -1668,10 +1905,21 @@ class ModernApp(ctk.CTk):
 
             # Title
             title_text = title[:55] + '...' if len(title) > 55 else title
-            ctk.CTkLabel(card, text=title_text, text_color=TEXT_PRI,
+            title_row = ctk.CTkFrame(card, fg_color='transparent')
+            title_row.pack(fill='x', padx=10, pady=(8, 2))
+            version_badge = self._video_version_badge(url, title)
+            wrap = 190 if version_badge else 230
+            if version_badge:
+                badge_text, badge_color = version_badge
+                ctk.CTkLabel(title_row, text=badge_text,
+                             text_color='#FFFFFF', fg_color=badge_color,
+                             corner_radius=4, width=34, height=18,
+                             font=(ui_font(), 9, 'bold')).pack(
+                    side='left', padx=(0, 6), anchor='n')
+            ctk.CTkLabel(title_row, text=title_text, text_color=TEXT_PRI,
                          font=(ui_font(), 10),
-                         wraplength=230, justify='left').pack(
-                padx=10, pady=(8, 2), anchor='w')
+                         wraplength=wrap, justify='left').pack(
+                side='left', fill='x', expand=True, anchor='w')
 
             # Bottom row
             bottom = ctk.CTkFrame(card, fg_color='transparent')
