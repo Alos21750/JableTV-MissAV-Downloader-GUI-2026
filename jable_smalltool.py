@@ -75,7 +75,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.12'
+APP_VERSION = '2.5.13'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -850,52 +850,58 @@ class SmallToolApp(tk.Tk):
         self.title(T('st_window_title', app=APP_NAME, version=APP_VERSION))
 
     def _ask_language_first_run(self):
-        result = {'code': 'en'}
-        popup = tk.Toplevel(self)
-        popup.title(T('st_lang_picker_title'))
-        popup.configure(bg=BG_DARK)
-        popup.resizable(False, False)
-        popup.transient(self)
+        popup = None
+        try:
+            popup = tk.Toplevel(self)
+            popup.title(T('st_lang_picker_title'))
+            popup.configure(bg=BG_DARK)
+            popup.resizable(False, False)
+            popup.transient(self)
 
-        picker_font = ui_font()
-        tk.Label(
-            popup, text=T('st_lang_picker_title'),
-            bg=BG_DARK, fg=TEXT_PRI,
-            font=(picker_font, 14, 'bold')).pack(padx=28, pady=(24, 12))
+            picker_font = ui_font()
+            tk.Label(
+                popup, text=T('st_lang_picker_title'),
+                bg=BG_DARK, fg=TEXT_PRI,
+                font=(picker_font, 14, 'bold')).pack(padx=28, pady=(24, 12))
 
-        def _choose(code='en'):
-            result['code'] = code
+            def _choose(code='en'):
+                config.set_ui_lang(code)
+                if code != get_lang():
+                    self._apply_language(code)
+                try:
+                    popup.destroy()
+                except tk.TclError:
+                    pass
+
+            for code, name in LANGUAGES:
+                tk.Button(
+                    popup, text=name, width=24,
+                    bg=BG_CARD, fg=TEXT_PRI,
+                    activebackground=ACCENT, activeforeground='#ffffff',
+                    relief='flat', bd=0, padx=12, pady=8,
+                    font=(picker_font, 11),
+                    command=lambda c=code: _choose(c)).pack(padx=28, pady=4)
+
+            popup.protocol('WM_DELETE_WINDOW', lambda: _choose(get_lang() or 'en'))
+            popup.update_idletasks()
+            x = max(0, (popup.winfo_screenwidth() - popup.winfo_width()) // 2)
+            y = max(0, (popup.winfo_screenheight() - popup.winfo_height()) // 3)
+            popup.geometry(f'+{x}+{y}')
+        except Exception:
+            if popup is not None:
+                try:
+                    popup.destroy()
+                except tk.TclError:
+                    pass
             try:
-                popup.grab_release()
-            except tk.TclError:
+                config.set_ui_lang('en')
+            except Exception:
                 pass
-            popup.destroy()
-
-        for code, name in LANGUAGES:
-            tk.Button(
-                popup, text=name, width=24,
-                bg=BG_CARD, fg=TEXT_PRI,
-                activebackground=ACCENT, activeforeground='#ffffff',
-                relief='flat', bd=0, padx=12, pady=8,
-                font=(picker_font, 11),
-                command=lambda c=code: _choose(c)).pack(padx=28, pady=4)
-
-        popup.protocol('WM_DELETE_WINDOW', lambda: _choose('en'))
-        popup.update_idletasks()
-        x = max(0, (popup.winfo_screenwidth() - popup.winfo_width()) // 2)
-        y = max(0, (popup.winfo_screenheight() - popup.winfo_height()) // 3)
-        popup.geometry(f'+{x}+{y}')
-        popup.grab_set()
-        self.wait_window(popup)
-        return result['code']
 
     def _first_run_language_prompt(self):
         if getattr(self, '_is_closing', False):
             return
-        code = self._ask_language_first_run()
-        config.set_ui_lang(code)
-        if code != get_lang():
-            self._apply_language(code)
+        self._ask_language_first_run()
 
     def _on_lang_change(self, name: str):
         code = self._lang_code_by_name.get(name, 'en')
