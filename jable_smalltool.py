@@ -75,7 +75,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.13'
+APP_VERSION = '2.5.14'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)

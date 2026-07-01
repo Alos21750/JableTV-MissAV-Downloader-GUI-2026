@@ -9,6 +9,7 @@ import io
 import csv
 import time
 import shutil
+import ssl
 import threading
 import concurrent.futures
 import tkinter as tk
@@ -18,6 +19,7 @@ from typing import Optional
 import customtkinter as ctk
 import requests
 from PIL import Image
+from urllib3.poolmanager import PoolManager
 
 import config
 import M3U8Sites
@@ -442,10 +444,36 @@ def fetch_page_data(browser_cls, url: str) -> dict:
 
 
 # ── Thumbnail loader ────────────────────────────────────────────────
+_SHARED_SSL_CTX = None
+_ssl_ctx_lock = threading.Lock()
 _thumb_session: Optional[requests.Session] = None
 _thumb_lock = threading.Lock()
 _thumb_cache: dict = {}   # url -> PIL.Image (raw, not CTkImage; Tk root needed)
 _THUMB_SIZE = (260, 146)  # 16:9 at 260px wide
+
+
+def _get_shared_ssl_context():
+    global _SHARED_SSL_CTX
+    if _SHARED_SSL_CTX is None:
+        with _ssl_ctx_lock:
+            if _SHARED_SSL_CTX is None:
+                try:
+                    import certifi
+                    _SHARED_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+                except Exception:
+                    _SHARED_SSL_CTX = ssl.create_default_context()
+    return _SHARED_SSL_CTX
+
+
+class _SharedSSLAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False, **kw):
+        kw['ssl_context'] = _get_shared_ssl_context()
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize,
+                                       block=block, **kw)
+
+    def proxy_manager_for(self, proxy, **kw):
+        kw['ssl_context'] = _get_shared_ssl_context()
+        return super().proxy_manager_for(proxy, **kw)
 
 
 def _get_thumb_session() -> requests.Session:
@@ -454,10 +482,10 @@ def _get_thumb_session() -> requests.Session:
         with _thumb_lock:
             if _thumb_session is None:
                 s = requests.Session()
-                a = requests.adapters.HTTPAdapter(pool_connections=8,
-                                                  pool_maxsize=32)
-                s.mount('http://', a)
-                s.mount('https://', a)
+                s.mount('http://', requests.adapters.HTTPAdapter(pool_connections=8,
+                                                                 pool_maxsize=32))
+                s.mount('https://', _SharedSSLAdapter(pool_connections=8,
+                                                      pool_maxsize=32))
                 _thumb_session = s
     return _thumb_session
 
@@ -490,6 +518,8 @@ def _fetch_thumbnail(url: str) -> Optional[Image.Image]:
 class ModernApp(ctk.CTk):
     def __init__(self, url: str = '', dest: str = 'download', lang: str = 'en'):
         super().__init__()
+
+        _get_shared_ssl_context()
 
         config.load_cf_overrides()
         self._lang_code_by_name = {name: code for code, name in LANGUAGES}
@@ -534,7 +564,7 @@ class ModernApp(ctk.CTk):
         self._dl_footer_lbl = None
         self._dl_drain_id = None
         self._dl_gen = 0
-        self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        self._thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self._speed_mbps = 0.0
         self._download_autosave_ticks = 0
         self._last_download_save_sig = None
@@ -843,7 +873,7 @@ class ModernApp(ctk.CTk):
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
         right_info.pack(side='right', padx=20, fill='y')
-        ctk.CTkLabel(right_info, text='v2.5.13  |  by ALOS',
+        ctk.CTkLabel(right_info, text='v2.5.14  |  by ALOS',
                      font=('Consolas', 10),
                      text_color=TEXT_DIM).pack(side='right')
         self._theme_btn = ctk.CTkButton(
@@ -1444,7 +1474,7 @@ class ModernApp(ctk.CTk):
         # Version badge
         ver_badge = ctk.CTkFrame(about_body, fg_color=BG_BADGE, corner_radius=4)
         ver_badge.pack(anchor='w', pady=(10, 0))
-        ctk.CTkLabel(ver_badge, text='v2.5.13',
+        ctk.CTkLabel(ver_badge, text='v2.5.14',
                      text_color=TEXT_SEC,
                      font=('Consolas', 10)).pack(padx=10, pady=4)
 
