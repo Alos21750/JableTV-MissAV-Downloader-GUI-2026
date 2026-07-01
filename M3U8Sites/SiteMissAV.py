@@ -42,10 +42,12 @@ class SiteMissAV(M3U8Crawler):
     # Matches video pages ONLY (no dm\d+ routing prefix — those are category pages):
     #   https://missav.ai/cn/sone-543-chinese-subtitle
     #   https://missav.ai/sone-543
+    #   https://missav.ai/dm1151/092014_887
+    #   https://missav.ai/dm464/081012-097
     # Does NOT match:
     #   https://missav.ai/dm278/chinese-subtitle  (category listing)
-    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*-\d+[a-zA-Z0-9\-]*)'
-    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*-\d+[a-zA-Z0-9\-]*)'
+    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-_]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z0-9][a-zA-Z0-9_]*(?:[-_][a-zA-Z0-9]+)*[-_]\d+[a-zA-Z0-9\-_]*)'
+    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z0-9][a-zA-Z0-9_]*(?:[-_][a-zA-Z0-9]+)*[-_]\d+[a-zA-Z0-9\-_]*)'
 
     _shared_scraper = None
     _scraper_lock = __import__('threading').Lock()
