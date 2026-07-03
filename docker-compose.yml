@@ -1,0 +1,17 @@
+# NAS-friendly compose. Put URLs (one per line) in ./downloads/urls.txt, then:
+#   docker compose run --rm jabletv               # downloads everything in urls.txt
+#   docker compose run --rm jabletv <URL> [<URL>] # or pass URL(s) directly
+# Videos land in ./downloads on the host.
+services:
+  jabletv:
+    image: ghcr.io/alos21750/jabletv:latest
+    # To build locally instead of pulling, comment out `image:` and uncomment:
+    # build: .
+    container_name: jabletv-downloader
+    volumes:
+      - ./downloads:/downloads
+    environment:
+      - RESOLUTION=highest        # highest | 1080 | 720 | 480
+      - URLS_FILE=/downloads/urls.txt
+    # This is a run-to-completion job, not a long-running service:
+    restart: "no"

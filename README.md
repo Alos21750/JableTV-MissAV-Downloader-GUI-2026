@@ -160,9 +160,33 @@ python main.py
 # 4. 啟動中文字幕自動下載小工具
 python jable_smalltool.py
 
-# 5. 命令列模式（可選）
-python main.py -nogui True
+# 5. 命令列模式（無介面，可選）
+python main.py --nogui --url "https://jable.tv/videos/abc-123/"
 ```
+
+### 🐳 Docker / NAS（無介面下載，適合群暉 / 威聯通等 NAS）
+
+映像檔由 GitHub Actions 自動建置並發佈到 GHCR（`ghcr.io/alos21750/jabletv`，支援 **amd64 / arm64**），內建 ffmpeg，支援 JableTV / MissAV / SupJav。
+
+```bash
+# 直接下載一或多個網址（影片存到主機的 ./downloads）
+docker run --rm -v "$(pwd)/downloads:/downloads" \
+    ghcr.io/alos21750/jabletv "https://jable.tv/videos/abc-123/"
+
+# 或把多個網址寫進 ./downloads/urls.txt（每行一個），批次下載
+docker run --rm -v "$(pwd)/downloads:/downloads" ghcr.io/alos21750/jabletv
+```
+
+用 docker-compose（NAS 最方便）：
+
+```bash
+# 把網址一行一個放進 ./downloads/urls.txt，然後：
+docker compose run --rm jabletv           # 下載 urls.txt 內全部
+docker compose run --rm jabletv <URL>     # 或直接指定網址
+```
+
+可用環境變數：`RESOLUTION`（highest / 1080 / 720 / 480）、`URLS_FILE`（清單路徑）、`DOWNLOAD_DIR`（容器內下載目錄，預設 `/downloads`）。
+> 註：GHCR 套件預設 private，NAS 拉取前請到 GitHub 該套件設定改為 public（或先 `docker login ghcr.io`）。也可 `docker build -t jabletv .` 自行建置。
 
 ## 使用說明
 
