@@ -22,6 +22,10 @@ def _unpack_js_eval(script_text):
     if not match:
         return None
     packed, a, c, keys_str = match.group(1), int(match.group(2)), int(match.group(3)), match.group(4).split('|')
+    # Guard against malformed packer params: base<=1 makes to_base loop forever;
+    # an absurd `c` would allocate an unbounded lookup dict. Bail on either.
+    if a <= 1 or c < 0 or c > 200000:
+        return None
 
     def to_base(n, base):
         digits = '0123456789abcdefghijklmnopqrstuvwxyz'
@@ -46,8 +50,8 @@ class SiteMissAV(M3U8Crawler):
     #   https://missav.ai/dm464/081012-097
     # Does NOT match:
     #   https://missav.ai/dm278/chinese-subtitle  (category listing)
-    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-_]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z0-9][a-zA-Z0-9_]*(?:[-_][a-zA-Z0-9]+)*[-_]\d+[a-zA-Z0-9\-_]*)'
-    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z0-9][a-zA-Z0-9_]*(?:[-_][a-zA-Z0-9]+)*[-_]\d+[a-zA-Z0-9\-_]*)'
+    website_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:cn|en|ja|ko|ms|th)/([a-zA-Z0-9][a-zA-Z0-9\-_]+)|https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
+    website_dirname_pattern = r'https://(?:www\.)?(?:missav\.(?:ai|ws|live)|missav123\.com)/(?:dm\d+/)?(?:(?:cn|en|ja|ko|ms|th)/)?([a-zA-Z0-9][a-zA-Z0-9\-_]*[-_]\d[a-zA-Z0-9\-_]*)'
 
     _shared_scraper = None
     _scraper_lock = __import__('threading').Lock()
@@ -116,6 +120,7 @@ class SiteMissAV(M3U8Crawler):
 class MissAVBrowser:
     """Fetches categories and video listings from missav.ai for the browse GUI."""
     _scraper = None
+    _scraper_lock = __import__('threading').Lock()
 
     # Fixed category list: no language segment means MissAV default Traditional Chinese.
     # Non-empty language codes (e.g. 'cn', 'en', 'ja') are inserted as prefixes.
@@ -136,12 +141,13 @@ class MissAVBrowser:
 
     @classmethod
     def _get_scraper(cls):
-        if cls._scraper is None:
-            if _use_cffi:
-                cls._scraper = cffi_requests.Session(impersonate='chrome')
-            else:
-                cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
-        return cls._scraper
+        with cls._scraper_lock:
+            if cls._scraper is None:
+                if _use_cffi:
+                    cls._scraper = cffi_requests.Session(impersonate='chrome')
+                else:
+                    cls._scraper = cloudscraper.create_scraper(browser=request_headers, delay=10)
+            return cls._scraper
 
     @classmethod
     def fetch_categories(cls, lang=''):

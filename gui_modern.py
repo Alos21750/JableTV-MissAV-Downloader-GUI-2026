@@ -450,6 +450,7 @@ def fetch_page_data(browser_cls, url: str) -> dict:
 _thumb_session: Optional[requests.Session] = None
 _thumb_lock = threading.Lock()
 _thumb_cache: dict = {}   # url -> PIL.Image (raw, not CTkImage; Tk root needed)
+_thumb_cache_lock = threading.Lock()   # guards _thumb_cache mutation across the 4 worker threads
 _THUMB_SIZE = (260, 146)  # 16:9 at 260px wide
 
 
@@ -480,12 +481,13 @@ def _fetch_thumbnail(url: str) -> Optional[Image.Image]:
             return None
         img = Image.open(io.BytesIO(r.content)).convert('RGB')
         img.thumbnail(_THUMB_SIZE, Image.LANCZOS)
-        _thumb_cache[url] = img
-        # Limit cache growth
-        if len(_thumb_cache) > 200:
-            # Drop oldest 40 entries
-            for k in list(_thumb_cache.keys())[:40]:
-                _thumb_cache.pop(k, None)
+        with _thumb_cache_lock:
+            _thumb_cache[url] = img
+            # Limit cache growth — under the lock so a concurrent insert can't resize the
+            # dict mid-iteration (RuntimeError: dictionary changed size during iteration).
+            if len(_thumb_cache) > 200:
+                for k in list(_thumb_cache.keys())[:40]:
+                    _thumb_cache.pop(k, None)
         return img
     except Exception:
         return None
@@ -2811,6 +2813,8 @@ class ModernApp(ctk.CTk):
                 self._clp_text = clp
                 for m in re.finditer(r'https?://\S+', clp):
                     url = m.group(0).rstrip('.,;)\'"')
+                    if len(url) > 2048:      # no real video URL is this long; bounds validation cost
+                        continue
                     if M3U8Sites.VaildateUrl(url):
                         existing = {i.url for i in self._dlmgr.get_items()}
                         if url not in existing:

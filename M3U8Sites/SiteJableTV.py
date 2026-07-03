@@ -54,15 +54,22 @@ class SiteJableTV(M3U8Crawler):
             if reason == 'blocked':
                 raise MirrorsBlockedError("所有鏡像都被 Cloudflare 阻擋（可能是你的網路/IP 信譽問題，請改用 VPN 或不同網路）")
             raise Exception(f"頁面解析失敗（版面改版或影片不存在）: {self._url}")
-        text = htmlfile.text
-        title = re.search('og:title".+/>', text)
-        image = re.search('og:image".+jpg"', text)
-        m3u8 = re.search("https://.+m3u8", text)
-        if not (title and image and m3u8):
+        parsed = self._parse_page(htmlfile.text)
+        if not parsed:
             raise Exception(f"頁面解析失敗（可能被 Cloudflare 阻擋或版面改版）: {self._url}")
-        self._targetName = title[0].split('"')[-2]
-        self._imageUrl = image[0].split('"')[-2]
-        self._m3u8url = m3u8[0]
+        self._targetName, self._imageUrl, self._m3u8url = parsed
+
+    @staticmethod
+    def _parse_page(text):
+        """Extract (title, image_url, m3u8_url) from a video page, or None if any is
+        missing. Precise captures instead of greedy `.+` — on minified/single-line HTML a
+        greedy `.+` spans to the LAST delimiter on the line, yielding a wrong title/URL."""
+        title = re.search(r'og:title"\s+content="([^"]+)"', text)
+        image = re.search(r'og:image"\s+content="([^"]+)"', text)
+        m3u8 = re.search(r'https://[^\s"\']+\.m3u8', text)  # bounded to one URL token
+        if not (title and image and m3u8):
+            return None
+        return title.group(1), image.group(1), m3u8.group(0)
 
 
 class SiteJableTV_Backup(SiteJableTV):

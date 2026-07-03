@@ -552,6 +552,9 @@ class M3U8Crawler:
                 self._key_iv = getattr(key, 'iv', None)
                 break  # use first key
 
+        # Per HLS: a key with no explicit IV uses an implicit IV = the segment's MEDIA
+        # SEQUENCE number, which begins at #EXT-X-MEDIA-SEQUENCE (may be non-zero), not 0.
+        self._media_sequence = getattr(m3u8obj, 'media_sequence', 0) or 0
         # Build segment URL list
         self._tsList = []
         for seg in m3u8obj.segments:
@@ -572,14 +575,22 @@ class M3U8Crawler:
             iv_hex = self._key_iv.replace("0x", "").replace("0X", "")
             iv_bytes = bytes.fromhex(iv_hex.zfill(32))
         else:
-            # Default: segment sequence number as 16-byte big-endian IV
-            iv_bytes = seq_num.to_bytes(16, 'big')
+            # Default IV = this segment's media-sequence number (base + playlist index),
+            # as a 16-byte big-endian value.
+            iv_bytes = (seq_num + getattr(self, '_media_sequence', 0)).to_bytes(16, 'big')
         return AES.new(self._key_content, AES.MODE_CBC, iv_bytes)
 
+    def _seg_savename(self, index):
+        """Per-segment temp file named by playlist INDEX, not URL basename. Two segment
+        URLs can share a basename (e.g. seg.ts?n=1 vs seg.ts?n=2, or same-named files in
+        different path dirs); basename naming collided them into one file — the second was
+        skipped as 'already done' and the first was read twice at merge, silently
+        corrupting the output. Index naming is unique and keeps resume correct."""
+        return os.path.join(self._temp_folder, f"{index:06d}.mp4")
+
     def _deleteMp4Chunks(self):
-        for url in self._tsList:
-            fileName = url.split('/')[-1].rsplit('.', 1)[0]
-            saveName = os.path.join(self._temp_folder, fileName + ".mp4")
+        for i in range(len(self._tsList)):
+            saveName = self._seg_savename(i)
             if os.path.exists(saveName):
                 try: os.remove(saveName)
                 except OSError: pass
@@ -626,14 +637,13 @@ class M3U8Crawler:
         try:
             remaining = n
             with open(merged, 'wb') as out:
-                for ts_url in self._tsList:
+                for idx, ts_url in enumerate(self._tsList):
                     if self._cancel_job:
                         return 0
-                    seg_name = ts_url.split('/')[-1].rsplit('.', 1)[0] + '.mp4'
-                    seg = os.path.join(self._temp_folder, seg_name)
+                    seg = self._seg_savename(idx)
                     if not os.path.exists(seg):
                         if not self._cancel_job:
-                            print(f"\n{seg_name} 片段遺失, 合成失敗!!!", flush=True)
+                            print(f"\n片段 {idx} 遺失, 合成失敗!!!", flush=True)
                         return 0
                     with open(seg, 'rb') as f:
                         shutil.copyfileobj(f, out, 1024 * 1024)
@@ -720,8 +730,7 @@ class M3U8Crawler:
     def _scrape(self, task):
         """Download and decrypt one segment. task=(seq_num, url)"""
         seq_num, url = task
-        fileName = url.split('/')[-1].rsplit('.', 1)[0]
-        saveName = os.path.join(self._temp_folder, fileName + ".mp4")
+        saveName = self._seg_savename(seq_num)
         if os.path.exists(saveName):
             # Segment already on disk (e.g. from a resumed job) — drop from pending
             with self._speed_lock:
@@ -800,8 +809,7 @@ class M3U8Crawler:
     def _prepareCrawl(self):
         self._pending_set = set()
         for i, url in enumerate(self._tsList):
-            fileName = url.split('/')[-1].rsplit('.', 1)[0]
-            saveName = os.path.join(self._temp_folder, fileName + ".mp4")
+            saveName = self._seg_savename(i)
             if not os.path.exists(saveName):
                 self._pending_set.add((i, url))
         if self._pending_set:

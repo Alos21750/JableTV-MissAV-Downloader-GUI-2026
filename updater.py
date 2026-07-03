@@ -15,6 +15,19 @@ REPO = "Alos21750/JableTV-MissAV-Downloader-GUI-2026"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 
+def _session():
+    """requests session that reuses the ONE shared SSLContext (ssl_util) so the
+    updater's background HTTPS can't race a fresh SSLContext construction with the
+    site scrapers — that race is the concurrent-SSLContext native crash (issue #25)."""
+    s = requests.Session()
+    try:
+        import ssl_util
+        s.mount('https://', ssl_util.SharedSSLAdapter())
+    except Exception:
+        pass
+    return s
+
+
 def parse_version(s):
     text = str(s or '').strip()
     if text.lower().startswith('v'):
@@ -44,7 +57,8 @@ def check_latest(timeout=10):
         "X-GitHub-Api-Version": "2022-11-28",
     }
     try:
-        r = requests.get(API_LATEST, headers=headers, timeout=timeout)
+        with _session() as s:
+            r = s.get(API_LATEST, headers=headers, timeout=timeout)
         if r.status_code != 200:
             return None
         data = r.json()
@@ -91,7 +105,7 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
     part_path = dest_path + '.part'
     _remove_quiet(part_path)
     try:
-        with requests.get(url, stream=True, timeout=timeout) as r:
+        with _session() as s, s.get(url, stream=True, timeout=timeout) as r:
             if r.status_code != 200:
                 return False
             total = int(r.headers.get('content-length') or 0)
@@ -140,9 +154,11 @@ set /a n=0
 move /Y {_bat_quote(new_exe_path)} {_bat_quote(cur)} >nul 2>&1
 if not errorlevel 1 goto done
 set /a n+=1
-if %n% GEQ 120 exit /b 1
+if %n% GEQ 120 goto giveup
 ping -n 2 127.0.0.1 >nul
 goto retry
+:giveup
+del {_bat_quote(new_exe_path)} >nul 2>&1
 :done
 start "" {_bat_quote(cur)}
 del "%~f0" >nul 2>&1

@@ -68,8 +68,8 @@ if __name__ == "__main__":
 
     if len(args.url) != 0:
         url_arg = args.url
-    elif args.random is True:
-        url_arg = av_recommand()
+    elif args.random:
+        url_arg = av_recommand() or ""   # None (site changed/blocked) -> empty, not a crash
 
     if args.nogui:
         M3U8Sites.consoles_main(url_arg, save_folder)
