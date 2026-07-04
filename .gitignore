@@ -15,3 +15,10 @@ jableTV.csv
 JableTV.csv
 main.spec
 __pycache__/
+
+# local maintenance guide (machine-specific paths — auto-loads locally, don't publish)
+CLAUDE.md
+# local tooling / runtime junk
+.claude/
+.wrangler/
+*.log
