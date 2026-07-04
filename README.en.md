@@ -1,6 +1,9 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
+  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
+  <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" />
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" />
+  <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/pkgs/container/jabletv"><img src="https://img.shields.io/badge/Docker%20%2F%20NAS-2496ED?style=for-the-badge&logo=docker&logoColor=white" /></a>
   <img src="https://img.shields.io/badge/License-Apache_2.0-D22128?style=for-the-badge" />
   <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases"><img src="https://img.shields.io/github/downloads/Alos21750/JableTV-MissAV-Downloader-GUI-2026/total?style=for-the-badge&color=00C853&label=Downloads&logo=github&logoColor=white&cacheSeconds=86400" /></a>
 </p>
@@ -13,7 +16,8 @@
   <a href="./README.md">繁體中文</a> ｜ English
 </p>
 
-> The best **Jable TV downloader** with a full GUI — no command line needed. Download videos from **Jable TV**, **MissAV**, and **SupJav** with a built-in video browser, keyword search, multi-select batch download, and up to 10 parallel high-speed downloads. Portable Windows `.exe` — just double-click to run, no Python or installation needed. Also supports FC2 videos, Chinese subtitle filtering, actress/category page bulk download, M3U8/HLS streams, and resolution selection.
+> The best **Jable TV downloader** with a full GUI — no command line needed. Download videos from **Jable TV**, **MissAV**, and **SupJav** with a built-in video browser, keyword search, multi-select batch download, and up to 10 parallel high-speed downloads. Also supports FC2 videos, Chinese subtitle filtering, actress/category page bulk download, M3U8/HLS streams, and resolution selection.
+> **🖥️ Cross-platform**: portable Windows `.exe` (double-click, no install), run from source on macOS / Linux, or a **headless Docker image for your NAS** (Synology / QNAP, amd64 + arm64).
 
 ---
 
@@ -31,6 +35,21 @@ Most Jable TV download tools are CLI-only — you need Python, pip, and a termin
 | Progress display | **Real-time progress bars** | Terminal text |
 | Resolution choice | **Highest / Lowest quality toggle** | Usually highest only |
 | Actively maintained | **Yes** | Most are abandoned |
+
+---
+
+## 🖥️ Platforms
+
+All three sites (JableTV / MissAV / SupJav) work on **every platform** — GUI for picking videos on the desktop, Docker for unattended downloading on a NAS:
+
+| Platform | How | Notes |
+|----------|-----|-------|
+| **🪟 Windows** | Portable `.exe` ([Releases](../../releases)) | Double-click, bundled ffmpeg, full GUI (**recommended**) |
+| **🍎 macOS** | `pip install -r requirements.txt` → `python main.py` | Full GUI (needs Python 3.8+ / Tk) |
+| **🐧 Linux** | Same as macOS | Full GUI (needs Python 3.8+ / Tk) |
+| **🐳 Docker / NAS** | `docker run … ghcr.io/alos21750/jabletv <URL>` | **Headless** batch downloads for Synology / QNAP, **amd64 + arm64** |
+
+<sub>▸ Commands in [Quick Start](#quick-start) below. The GUI is for browse/search/multi-select; the Docker image is built for hands-off downloading on a NAS.</sub>
 
 ---
 
@@ -160,9 +179,33 @@ python main.py
 # 4. Launch the daily auto-downloader
 python jable_smalltool.py
 
-# 5. CLI mode (optional)
-python main.py -nogui True
+# 5. CLI mode (headless, optional)
+python main.py --nogui --url "https://jable.tv/videos/abc-123/"
 ```
+
+### 🐳 Docker / NAS (headless — great for Synology / QNAP)
+
+The image is built by GitHub Actions and published to GHCR (`ghcr.io/alos21750/jabletv`, **amd64 / arm64**), ffmpeg bundled, works for JableTV / MissAV / SupJav.
+
+```bash
+# Download one or more URLs (videos land in ./downloads on the host)
+docker run --rm -v "$(pwd)/downloads:/downloads" \
+    ghcr.io/alos21750/jabletv "https://jable.tv/videos/abc-123/"
+
+# Or put URLs (one per line) in ./downloads/urls.txt and batch-download
+docker run --rm -v "$(pwd)/downloads:/downloads" ghcr.io/alos21750/jabletv
+```
+
+With docker-compose (easiest on a NAS):
+
+```bash
+# Put URLs one-per-line in ./downloads/urls.txt, then:
+docker compose run --rm jabletv          # download everything in urls.txt
+docker compose run --rm jabletv <URL>    # or pass a URL directly
+```
+
+Env vars: `RESOLUTION` (highest / 1080 / 720 / 480), `URLS_FILE`, `DOWNLOAD_DIR` (default `/downloads`).
+> ✅ The image is **public** — `docker pull ghcr.io/alos21750/jabletv`, no login. Or build it yourself: `docker build -t jabletv .`.
 
 ## Usage
 
