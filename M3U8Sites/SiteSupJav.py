@@ -3,6 +3,8 @@
 
 import re
 import html
+import os
+import time
 import cloudscraper
 try:
     from curl_cffi import requests as cffi_requests
@@ -68,6 +70,40 @@ def _strip_fake_header(data):
     return b''
 
 
+def _server_links(html_text):
+    """Return {SERVER_NAME: data_link} for every .btn-server anchor on a SupJav
+    video page. Names seen: TV, FST, ST (Streamtape), VOE."""
+    soup = BeautifulSoup(html_text, 'html.parser')
+    out = {}
+    for a in soup.select('a.btn-server[data-link]'):
+        name = a.get_text(strip=True).upper()
+        link = a.get('data-link', '')
+        if name and link and name not in out:
+            out[name] = link
+    return out
+
+
+def _streamtape_direct_url(html_text):
+    """Extract the direct progressive-MP4 URL from a Streamtape embed page.
+    Streamtape overwrites #robotlink via JS:  'PREFIX' + ('SUFFIX').substring(a)[.substring(b)]
+    — the static div text is a decoy; only the JS-computed value carries the live token."""
+    m = re.search(
+        r"getElementById\(\s*['\"]robotlink['\"]\s*\)\.innerHTML\s*=\s*"
+        r"['\"]([^'\"]*)['\"]\s*\+\s*(?:['\"]{2}\s*\+\s*)?"
+        r"\(\s*['\"]([^'\"]*)['\"]\s*\)((?:\.substring\(\s*\d+\s*\))+)",
+        html_text)
+    if not m:
+        return None
+    prefix, suffix, subs = m.group(1), m.group(2), m.group(3)
+    s = suffix
+    for off in re.findall(r'substring\(\s*(\d+)\s*\)', subs):
+        s = s[int(off):]
+    link = (prefix + s).lstrip('/')
+    if 'get_video' not in link:
+        return None
+    return 'https://' + link
+
+
 def _parse_videos(soup):
     videos = []
     seen = set()
@@ -97,7 +133,12 @@ class SiteSupJav(M3U8Crawler):
     def _transform_segment(self, data):
         return _strip_fake_header(data)
 
+    _direct_url = None
+    _direct_referer = None
+
     def get_url_infos(self):
+        self._direct_url = None
+        self._direct_referer = None
         with _make_scraper() as scraper:
             def _validate(resp):
                 return 'data-link' in resp.text
@@ -108,23 +149,127 @@ class SiteSupJav(M3U8Crawler):
                 raise Exception(f"頁面解析失敗（版面改版或影片不存在）: {self._url}")
 
             soup = BeautifulSoup(htmlfile.content, 'html.parser')
-            tv_link = _extract_tv_link(htmlfile.text)
-            if not tv_link:
-                raise Exception("此影片沒有支援的 TV 伺服器來源（其他來源 FST/ST/VOE 暫不支援）")
+            servers = _server_links(htmlfile.text)   # {'TV':.., 'ST':.., 'VOE':.., 'FST':..}
+            if not servers:
+                raise Exception("此影片沒有可用的伺服器來源（版面改版？）")
 
-            tvid = tv_link[::-1]
-            r2 = scraper.get(SUPREMEJAV.format(tvid), headers={'Referer':'https://supjav.com/'}, timeout=20)
-            if r2.status_code in (403, 429, 503):
-                raise MirrorsBlockedError(_BLOCKED_MSG)
-            m3u8url = _extract_m3u8(r2.text)
-            if not m3u8url:
-                raise Exception("無法解析影片串流（SupJav 來源改版或暫時失效）")
+            m3u8url = None
+            # 1) Streamtape (ST): a direct progressive MP4 — PREFERRED, because SupJav's
+            #    TV server now serves TS segments from auth-gated Google Drive that return
+            #    a sign-in/403/429 to any non-browser client, so they can't be downloaded (#29).
+            if 'ST' in servers:
+                try:
+                    emb = scraper.get(SUPREMEJAV.format(servers['ST'][::-1]),
+                                      headers={'Referer': 'https://supjav.com/'},
+                                      timeout=25, allow_redirects=True)
+                    direct = _streamtape_direct_url(emb.text)
+                    if direct:
+                        self._direct_url = direct
+                        self._direct_referer = str(getattr(emb, 'url', '') or 'https://streamtape.com/')
+                except MirrorsBlockedError:
+                    raise
+                except Exception:
+                    pass
+            # 2) TV: HLS m3u8 — fallback (works for videos SupJav hasn't migrated, and if
+            #    they ever revert). May resolve but fail at segment fetch when Google-gated.
+            if not self._direct_url and 'TV' in servers:
+                try:
+                    r2 = scraper.get(SUPREMEJAV.format(servers['TV'][::-1]),
+                                     headers={'Referer': 'https://supjav.com/'}, timeout=20)
+                    if getattr(r2, 'status_code', 0) in (403, 429, 503):
+                        raise MirrorsBlockedError(_BLOCKED_MSG)
+                    m3u8url = _extract_m3u8(r2.text)
+                except MirrorsBlockedError:
+                    raise
+                except Exception:
+                    m3u8url = None
+
+            if not self._direct_url and not m3u8url:
+                raise Exception("此影片目前無可用下載來源"
+                                "（SupJav TV 來源已改用受 Google 登入保護的區段，且此片無 Streamtape 備援）")
 
         title = _extract_title(soup)
         self._targetName = html.unescape(title)
         self._imageUrl = None
         self._m3u8url = m3u8url
         self._extra_headers = {'Referer': 'https://supjav.com/'}
+
+    def is_url_vaildate(self):
+        # The base gate is `True if self._m3u8url` — but a Streamtape source resolves to
+        # a direct MP4 (_direct_url) with no m3u8. Without this override the caller would
+        # treat the URL as invalid and silently skip it (and __init__ would not sanitize
+        # the target filename).
+        return bool(self._m3u8url or getattr(self, '_direct_url', None))
+
+    def start_download(self):
+        # A Streamtape source is a single progressive MP4 — download it directly,
+        # bypassing the HLS segment/decrypt/merge pipeline the m3u8 path uses.
+        if getattr(self, '_direct_url', None):
+            return self._download_direct()
+        return super().start_download()
+
+    @staticmethod
+    def _safe_remove(path):
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def _download_direct(self):
+        if self._cancel_job:
+            return False
+        self._cancel_job = False
+        self._create_dest_folder()
+        if self.is_target_video_exist():
+            print("檔案已存在!!", flush=True)
+            return True
+        out = self._get_video_savename()
+        part = out + '.part'
+        self._safe_remove(part)
+        ref = self._direct_referer or 'https://supjav.com/'
+        start = time.time()
+        done = 0
+        total = 0
+        try:
+            with _make_scraper() as scraper:
+                resp = scraper.get(self._direct_url, headers={'Referer': ref},
+                                   timeout=60, stream=True, allow_redirects=True)
+                if getattr(resp, 'status_code', 0) != 200:
+                    raise Exception(f"直接下載失敗 (HTTP {getattr(resp, 'status_code', '?')})")
+                try:
+                    total = int(resp.headers.get('content-length') or 0)
+                except Exception:
+                    total = 0
+                with open(part, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=262144):
+                        if self._cancel_job:
+                            break
+                        if not chunk:
+                            continue
+                        speed_limiter.acquire(len(chunk))
+                        f.write(chunk)
+                        done += len(chunk)
+                        elapsed = time.time() - start
+                        speed = done / elapsed if elapsed > 0 else 0
+                        if self._progress_callback and total > 0:
+                            self._progress_callback(done, total, speed)
+        except Exception:
+            self._safe_remove(part)
+            raise
+        if self._cancel_job:
+            self._safe_remove(part)
+            return False
+        if total > 0 and done < int(total * 0.98):
+            self._safe_remove(part)
+            raise Exception("下載不完整（連線中斷？請重試）")
+        try:
+            os.replace(part, out)
+        except Exception:
+            self._safe_remove(part)
+            raise
+        print(f"\n下載完成: {os.path.basename(out)}", flush=True)
+        return True
 
 
 class SupJavBrowser:

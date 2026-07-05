@@ -54,6 +54,8 @@ from M3U8Sites.SiteSupJav import (
     _extract_title,
     _extract_tv_link,
     _parse_videos,
+    _server_links,
+    _streamtape_direct_url,
     _strip_fake_header,
 )
 
@@ -257,6 +259,48 @@ def test_load_m3u8_raises_generic_when_content_is_not_playlist(monkeypatch):
     with pytest.raises(Exception) as exc:
         DummyCrawler()._load_m3u8('https://example.test/master.m3u8')
     assert not isinstance(exc.value, crawler_mod.MirrorsBlockedError)
+
+
+def test_server_links_maps_all_btn_servers():
+    html = (
+        '<a href="javascript:;" class="btn-server active" data-link="AAA">TV</a>'
+        '<a href="javascript:;" class="btn-server" data-link="BBB">FST</a>'
+        '<a href="javascript:;" class="btn-server" data-link="CCC">ST</a>'
+        '<a href="javascript:;" class="btn-server" data-link="DDD">VOE</a>'
+    )
+    assert _server_links(html) == {'TV': 'AAA', 'FST': 'BBB', 'ST': 'CCC', 'VOE': 'DDD'}
+    assert _server_links('<div>no servers here</div>') == {}
+
+
+def test_streamtape_direct_url_evaluates_js_substring_and_ignores_decoy():
+    # Streamtape overwrites #robotlink via JS; the static div text carries a DECOY token,
+    # the real token only appears in the JS-computed value.
+    html = (
+        '<div id="ideoolink" style="display:none;">/streamtape.com/get_video?id=ABC'
+        '&expires=123&ip=YYY&token=DECOY_2cde</div>'
+        '<div id="robotlink" style="display:none;">/streamtape.com/get_video?id=ABC'
+        '&expires=123&ip=YYY&token=DECOY_2cde</div>'
+        "<script>document.getElementById('robotlink').innerHTML = '//streamtape.com/get_'"
+        "+ ('xcdvideo?id=ABC&expires=123&ip=YYY&token=REAL_2-E6').substring(2).substring(1);</script>"
+    )
+    url = _streamtape_direct_url(html)
+    assert url == 'https://streamtape.com/get_video?id=ABC&expires=123&ip=YYY&token=REAL_2-E6'
+    assert 'DECOY' not in url            # never return the static-div decoy token
+    assert _streamtape_direct_url('<html>no robotlink</html>') is None
+
+
+def test_is_url_vaildate_accepts_direct_url_source():
+    # Regression: the base gate is `True if self._m3u8url`; a Streamtape source has no
+    # m3u8, only _direct_url. Without the override the caller silently skips the URL.
+    s = SiteSupJav.__new__(SiteSupJav)
+    s._m3u8url = None
+    s._direct_url = None
+    assert s.is_url_vaildate() is False
+    s._direct_url = 'https://streamtape.com/get_video?id=x&token=y'
+    assert s.is_url_vaildate() is True
+    s._direct_url = None
+    s._m3u8url = 'https://cdn.turboviplay.com/data3/x/x.m3u8'
+    assert s.is_url_vaildate() is True
 
 
 def test_create_m3u8_raises_on_zero_segments(monkeypatch):
