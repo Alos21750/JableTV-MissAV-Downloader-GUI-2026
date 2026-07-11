@@ -5,6 +5,7 @@ import re
 import html
 import os
 import time
+import concurrent.futures
 import cloudscraper
 try:
     from curl_cffi import requests as cffi_requests
@@ -14,12 +15,14 @@ except ImportError:
 import threading as _threading
 from urllib.parse import quote
 from M3U8Sites.M3U8Crawler import *
+from M3U8Sites.M3U8Crawler import _get_session
 from bs4 import BeautifulSoup
 import site_i18n
 
 
 SUPREMEJAV = 'https://lk1.supremejav.com/supjav.php?c={}'
 _BLOCKED_MSG = "所有鏡像都被 Cloudflare 阻擋（可能是你的網路/IP 信譽問題，請改用 VPN 或不同網路）"
+_DIRECT_RANGE_WORKERS = 4
 
 _browser_scraper = None
 _browser_scraper_lock = _threading.Lock()
@@ -102,6 +105,29 @@ def _streamtape_direct_url(html_text):
     if 'get_video' not in link:
         return None
     return 'https://' + link
+
+
+def _content_range(value):
+    match = re.fullmatch(r'bytes\s+(\d+)-(\d+)/(\d+)', str(value or '').strip(), re.I)
+    if not match:
+        return None
+    start, end, total = (int(part) for part in match.groups())
+    if start > end or end >= total:
+        return None
+    return start, end, total
+
+
+def _split_byte_ranges(total, workers=_DIRECT_RANGE_WORKERS):
+    workers = min(max(1, int(workers)), total)
+    chunk, remainder = divmod(total, workers)
+    ranges = []
+    start = 0
+    for index in range(workers):
+        size = chunk + (1 if index < remainder else 0)
+        end = start + size - 1
+        ranges.append((start, end))
+        start = end + 1
+    return ranges
 
 
 def _parse_videos(soup):
@@ -229,31 +255,12 @@ class SiteSupJav(M3U8Crawler):
         self._safe_remove(part)
         ref = self._direct_referer or 'https://supjav.com/'
         start = time.time()
-        done = 0
-        total = 0
         try:
-            with _make_scraper() as scraper:
-                resp = scraper.get(self._direct_url, headers={'Referer': ref},
-                                   timeout=60, stream=True, allow_redirects=True)
-                if getattr(resp, 'status_code', 0) != 200:
-                    raise Exception(f"直接下載失敗 (HTTP {getattr(resp, 'status_code', '?')})")
-                try:
-                    total = int(resp.headers.get('content-length') or 0)
-                except Exception:
-                    total = 0
-                with open(part, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=262144):
-                        if self._cancel_job:
-                            break
-                        if not chunk:
-                            continue
-                        speed_limiter.acquire(len(chunk))
-                        f.write(chunk)
-                        done += len(chunk)
-                        elapsed = time.time() - start
-                        speed = done / elapsed if elapsed > 0 else 0
-                        if self._progress_callback and total > 0:
-                            self._progress_callback(done, total, speed)
+            ranged = self._download_direct_ranges(part, ref, start)
+            if ranged is None:
+                done, total = self._download_direct_serial(part, ref, start)
+            else:
+                done, total = ranged
         except Exception:
             self._safe_remove(part)
             raise
@@ -270,6 +277,140 @@ class SiteSupJav(M3U8Crawler):
             raise
         print(f"\n下載完成: {os.path.basename(out)}", flush=True)
         return True
+
+    def _download_direct_ranges(self, part, ref, start_time):
+        """Use four HTTP Range connections when the direct host advertises byte ranges.
+        The shared requests session mounts SharedSSLAdapter, which is required for every
+        concurrent HTTPS path in this project. Return None to keep the serial fallback."""
+        session = _get_session()
+        probe = None
+        try:
+            probe = session.get(
+                self._direct_url,
+                headers={'Referer': ref, 'Range': 'bytes=0-0'},
+                timeout=60,
+                stream=True,
+                allow_redirects=True,
+            )
+            info = _content_range(getattr(probe, 'headers', {}).get('content-range'))
+            if getattr(probe, 'status_code', 0) != 206 or not info or info[:2] != (0, 0):
+                return None
+            total = info[2]
+        except Exception:
+            return None
+        finally:
+            if probe is not None:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+
+        ranges = _split_byte_ranges(total)
+        if len(ranges) == 1:
+            return None
+
+        with open(part, 'wb') as target:
+            target.truncate(total)
+
+        progress_lock = _threading.Lock()
+        stop_event = _threading.Event()
+        done = 0
+
+        def _fetch_range(bounds):
+            nonlocal done
+            range_start, range_end = bounds
+            expected = range_end - range_start + 1
+            response = session.get(
+                self._direct_url,
+                headers={'Referer': ref, 'Range': f'bytes={range_start}-{range_end}'},
+                timeout=60,
+                stream=True,
+                allow_redirects=True,
+            )
+            try:
+                response_range = _content_range(
+                    getattr(response, 'headers', {}).get('content-range'))
+                if (getattr(response, 'status_code', 0) != 206 or
+                        response_range != (range_start, range_end, total)):
+                    raise Exception("直接下載來源未正確回應分段請求")
+
+                written = 0
+                with open(part, 'r+b', buffering=0) as target:
+                    target.seek(range_start)
+                    for chunk in response.iter_content(chunk_size=262144):
+                        if self._cancel_job or stop_event.is_set():
+                            break
+                        if not chunk:
+                            continue
+                        if written + len(chunk) > expected:
+                            raise Exception("直接下載分段長度超出預期")
+                        speed_limiter.acquire(len(chunk))
+                        if target.write(chunk) != len(chunk):
+                            raise Exception("直接下載寫入失敗")
+                        written += len(chunk)
+                        with progress_lock:
+                            done += len(chunk)
+                            current_done = done
+                            elapsed = time.time() - start_time
+                            speed = current_done / elapsed if elapsed > 0 else 0
+                            if self._progress_callback:
+                                self._progress_callback(current_done, total, speed)
+                if not self._cancel_job and not stop_event.is_set() and written != expected:
+                    raise Exception("直接下載分段不完整（連線中斷？請重試）")
+                return written
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(ranges))
+        self._t2_executor = executor
+        futures = [executor.submit(_fetch_range, bounds) for bounds in ranges]
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
+        except Exception:
+            stop_event.set()
+            for future in futures:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=True)
+            self._t2_executor = None
+
+        if self._cancel_job:
+            return done, total
+        if done != total:
+            raise Exception("直接下載不完整（連線中斷？請重試）")
+        return done, total
+
+    def _download_direct_serial(self, part, ref, start_time):
+        done = 0
+        total = 0
+        with _make_scraper() as scraper:
+            resp = scraper.get(self._direct_url, headers={'Referer': ref},
+                               timeout=60, stream=True, allow_redirects=True)
+            if getattr(resp, 'status_code', 0) != 200:
+                raise Exception(f"直接下載失敗 (HTTP {getattr(resp, 'status_code', '?')})")
+            try:
+                total = int(resp.headers.get('content-length') or 0)
+            except Exception:
+                total = 0
+            with open(part, 'wb') as target:
+                for chunk in resp.iter_content(chunk_size=262144):
+                    if self._cancel_job:
+                        break
+                    if not chunk:
+                        continue
+                    speed_limiter.acquire(len(chunk))
+                    target.write(chunk)
+                    done += len(chunk)
+                    elapsed = time.time() - start_time
+                    speed = done / elapsed if elapsed > 0 else 0
+                    if self._progress_callback and total > 0:
+                        self._progress_callback(done, total, speed)
+        return done, total
 
 
 class SupJavBrowser:

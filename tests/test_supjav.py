@@ -1,5 +1,6 @@
 from urllib.parse import urljoin
 import sys
+import threading
 import types
 
 import pytest
@@ -45,6 +46,7 @@ _stub_runtime_dependency('m3u8', _m3u8_stub)
 _stub_runtime_dependency('customtkinter', _customtkinter_stub)
 
 import M3U8Sites.M3U8Crawler as crawler_mod
+import M3U8Sites.SiteSupJav as supjav_mod
 from bs4 import BeautifulSoup
 from M3U8Sites.M3U8Crawler import M3U8Crawler
 from M3U8Sites.SiteSupJav import (
@@ -301,6 +303,111 @@ def test_is_url_vaildate_accepts_direct_url_source():
     s._direct_url = None
     s._m3u8url = 'https://cdn.turboviplay.com/data3/x/x.m3u8'
     assert s.is_url_vaildate() is True
+
+
+def test_direct_download_uses_parallel_ranges_and_assembles_file(monkeypatch, tmp_path):
+    payload = bytes(range(256)) * 1024
+    calls = []
+    calls_lock = threading.Lock()
+
+    class RangeResponse:
+        def __init__(self, start, end):
+            self.status_code = 206
+            self.headers = {
+                'content-range': f'bytes {start}-{end}/{len(payload)}',
+                'content-length': str(end - start + 1),
+            }
+            self._data = payload[start:end + 1]
+
+        def iter_content(self, chunk_size):
+            for offset in range(0, len(self._data), chunk_size):
+                yield self._data[offset:offset + chunk_size]
+
+        def close(self):
+            pass
+
+    class RangeSession:
+        def get(self, url, headers=None, **kwargs):
+            range_header = (headers or {}).get('Range')
+            with calls_lock:
+                calls.append(range_header)
+            assert range_header and range_header.startswith('bytes=')
+            start, end = (int(value) for value in range_header[6:].split('-', 1))
+            return RangeResponse(start, end)
+
+    monkeypatch.setattr(supjav_mod, '_get_session', lambda: RangeSession(), raising=False)
+    monkeypatch.setattr(
+        supjav_mod,
+        '_make_scraper',
+        lambda: (_ for _ in ()).throw(AssertionError('range-capable downloads must not use the serial path')),
+    )
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._dest_folder = str(tmp_path)
+    crawler._targetName = 'parallel'
+    crawler._direct_url = 'https://streamtape.example/get_video?id=test'
+    crawler._direct_referer = 'https://streamtape.example/e/test'
+    crawler._progress_callback = None
+    crawler._t2_executor = None
+
+    assert crawler._download_direct() is True
+    assert (tmp_path / 'parallel.mp4').read_bytes() == payload
+    assert not (tmp_path / 'parallel.mp4.part').exists()
+
+    range_calls = [value for value in calls if value != 'bytes=0-0']
+    assert len(range_calls) == 4
+
+
+def test_direct_download_keeps_serial_fallback_without_range_support(monkeypatch, tmp_path):
+    payload = b'serial-fallback-data'
+
+    class ProbeResponse:
+        status_code = 200
+        headers = {'content-length': str(len(payload))}
+
+        def close(self):
+            pass
+
+    class ProbeSession:
+        def get(self, url, headers=None, **kwargs):
+            assert (headers or {}).get('Range') == 'bytes=0-0'
+            return ProbeResponse()
+
+    class SerialResponse:
+        status_code = 200
+        headers = {'content-length': str(len(payload))}
+
+        def iter_content(self, chunk_size):
+            yield payload
+
+    class SerialScraper:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, headers=None, **kwargs):
+            assert 'Range' not in (headers or {})
+            return SerialResponse()
+
+    monkeypatch.setattr(supjav_mod, '_get_session', lambda: ProbeSession())
+    monkeypatch.setattr(supjav_mod, '_make_scraper', SerialScraper)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._dest_folder = str(tmp_path)
+    crawler._targetName = 'serial'
+    crawler._direct_url = 'https://example.test/video.mp4'
+    crawler._direct_referer = 'https://example.test/embed'
+    crawler._progress_callback = None
+    crawler._t2_executor = None
+
+    assert crawler._download_direct() is True
+    assert (tmp_path / 'serial.mp4').read_bytes() == payload
 
 
 def test_create_m3u8_raises_on_zero_segments(monkeypatch):

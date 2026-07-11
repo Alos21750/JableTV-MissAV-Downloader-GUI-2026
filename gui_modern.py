@@ -32,7 +32,7 @@ from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 
-APP_VERSION = '2.5.20'
+APP_VERSION = '2.5.21'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
