@@ -92,7 +92,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.23'
+APP_VERSION = '2.5.24'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -240,6 +240,8 @@ class SmallToolWorker:
         self._seen_lock = threading.Lock()
         self._progress = None  # (done, total, speed_bps, title) or None
         self._progress_lock = threading.Lock()
+        self._scan_state = None  # (site, category, page, eligible_count) or None
+        self._scan_state_lock = threading.Lock()
         self._scan_lock = threading.Lock()
         self._active_site = None
         self._active_site_lock = threading.Lock()
@@ -252,6 +254,15 @@ class SmallToolWorker:
         with self._progress_lock:
             return self._progress
 
+    def get_scan_state(self):
+        with self._scan_state_lock:
+            return self._scan_state
+
+    def _set_scan_state(self, site=None, category='', page=0, eligible_count=0):
+        with self._scan_state_lock:
+            self._scan_state = (
+                (site, category, page, eligible_count) if site else None)
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
@@ -261,6 +272,7 @@ class SmallToolWorker:
 
     def stop(self):
         self._stop.set()
+        self._set_scan_state()
 
     def cancel_active_download(self):
         with self._active_site_lock:
@@ -521,6 +533,7 @@ class SmallToolWorker:
         try:
             return self._scan_and_download_locked(cfg)
         finally:
+            self._set_scan_state()
             self._scan_lock.release()
 
     def _scan_and_download_locked(self, cfg: dict):
@@ -544,6 +557,7 @@ class SmallToolWorker:
         first_run = not cfg.get('first_run_done', False)
         is_jable_site = any(t['site'] == 'JableTV' for t in targets)
 
+        self._set_status('st_scanning', ACCENT)
         self._log(f'{"First run" if first_run else "Daily check"} — '
                   f'{len(targets)} target(s), baseline {baseline_str}')
 
@@ -584,6 +598,8 @@ class SmallToolWorker:
                     break
 
                 page_url = self._build_page_url(site_name, base_url, page)
+                self._set_scan_state(
+                    site_name, cat_name, page, len(all_new_videos))
                 self._log(f'  Page {page}: {page_url}')
                 try:
                     videos = self._fetch_page_for_site(site_name, page_url)
@@ -688,6 +704,9 @@ class SmallToolWorker:
                     v['_site'] = site_name
                     all_new_videos.append(v)
 
+                self._set_scan_state(
+                    site_name, cat_name, page, len(all_new_videos))
+
                 if not first_run and page_all_seen and not reached_baseline:
                     self._log('  All seen on this page — stopping.')
                     break
@@ -701,6 +720,8 @@ class SmallToolWorker:
             save_config(cfg)
             return True
 
+        self._set_scan_state()
+        self._set_status('st_downloading', ACCENT)
         self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
         download_blocked = False
         for v in all_new_videos:
@@ -835,8 +856,11 @@ class SmallToolApp(ctk.CTk):
                                        status_fn=self._set_status_threadsafe)
         self._check_vars: dict[str, tk.BooleanVar] = {}  # stable "site|target-id" keys
         self._target_widgets: list[tuple[object, str]] = []
+        self._filter_groups: list[dict] = []
         self._category_groups: list[list[object]] = []
         self._category_columns = category_columns_for_width(980)
+        self._categories_collapsed = False
+        self._progress_display_mode = 'idle'
         self._resize_after_id = None
 
         self._build_ui()
@@ -937,6 +961,7 @@ class SmallToolApp(ctk.CTk):
             'check_now_state': check_state,
             'status_key': self._status_key,
             'status_fg': self._status_fg,
+            'categories_collapsed': self._categories_collapsed,
         }
 
     def _restore_ui_state(self, snapshot: dict):
@@ -962,6 +987,7 @@ class SmallToolApp(ctk.CTk):
         else:
             self._set_status_key(snapshot['status_key'], snapshot['status_fg'])
         self._check_now_btn.configure(state=snapshot['check_now_state'])
+        self._set_categories_collapsed(snapshot['categories_collapsed'])
 
     def _apply_language(self, code: str):
         self._rebuilding = True
@@ -979,6 +1005,7 @@ class SmallToolApp(ctk.CTk):
 
             self._check_vars = {}
             self._target_widgets = []
+            self._filter_groups = []
             self._category_groups = []
             self._build_ui()
             self._restore_ui_state(snapshot)
@@ -1061,6 +1088,8 @@ class SmallToolApp(ctk.CTk):
                         column=index % self._category_columns)
                 except tk.TclError:
                     pass
+        if hasattr(self, '_category_filter_var'):
+            self._filter_targets()
 
     def _build_ui(self):
         font_family = ui_font()
@@ -1187,6 +1216,7 @@ class SmallToolApp(ctk.CTk):
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
         selection.pack(fill='both', expand=True, pady=(12, 10))
+        self._selection_panel = selection
 
         selection_header = ctk.CTkFrame(selection, fg_color='transparent')
         selection_header.pack(fill='x', padx=16, pady=(14, 8))
@@ -1198,17 +1228,30 @@ class SmallToolApp(ctk.CTk):
             font=(font_family, 10, 'bold'))
         self._selected_count_lbl.pack(side='left', padx=(10, 0))
 
+        self._categories_toggle_btn = ctk.CTkButton(
+            selection_header, text=T('st_categories_collapse'),
+            width=104, height=32, corner_radius=CONTROL_RADIUS,
+            fg_color='transparent', hover_color=BG_CARD_HOVER,
+            border_width=1, border_color=BORDER,
+            text_color=TEXT_SEC, font=(font_family, 9, 'bold'),
+            command=self._toggle_categories)
+        self._categories_toggle_btn.pack(side='right')
+
+        self._category_filter_box = ctk.CTkFrame(
+            selection_header, fg_color='transparent')
+        self._category_filter_box.pack(side='right', padx=(0, 8))
+        ctk.CTkLabel(
+            self._category_filter_box, text=T('st_filter_categories'),
+            text_color=TEXT_DIM, font=(font_family, 9)).pack(
+                side='left', padx=(0, 8))
         self._category_filter_var = tk.StringVar()
         filter_entry = ctk.CTkEntry(
-            selection_header, textvariable=self._category_filter_var,
-            width=250, height=34,
+            self._category_filter_box, textvariable=self._category_filter_var,
+            width=190, height=32,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
             text_color=TEXT_PRI, font=(font_family, 10))
-        filter_entry.pack(side='right')
-        ctk.CTkLabel(
-            selection_header, text=T('st_filter_categories'), text_color=TEXT_DIM,
-            font=(font_family, 9)).pack(side='right', padx=(0, 8))
+        filter_entry.pack(side='left')
         self._category_filter_var.trace_add('write', self._filter_targets)
 
         tabview = ctk.CTkTabview(
@@ -1220,6 +1263,7 @@ class SmallToolApp(ctk.CTk):
             segmented_button_unselected_hover_color=BG_CARD_HOVER,
             text_color=TEXT_PRI, border_width=0)
         tabview.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self._category_tabview = tabview
 
         for site_name, site_info in SITES.items():
             tab_name = f'{site_name}  {len(list(iter_targets(site_name)))}'
@@ -1265,6 +1309,7 @@ class SmallToolApp(ctk.CTk):
                 for col in range(3):
                     cat_grid.grid_columnconfigure(col, weight=1)
                 group_widgets = []
+                filter_items = []
                 for i, target in enumerate(group['targets']):
                     label = target_label(target)
                     key = selection_key(site_name, target['id'])
@@ -1283,7 +1328,12 @@ class SmallToolApp(ctk.CTk):
                     cb.grid(row=row, column=col, sticky='w', padx=6, pady=3)
                     self._target_widgets.append((cb, label.casefold()))
                     group_widgets.append(cb)
+                    filter_items.append((cb, label.casefold()))
                 self._category_groups.append(group_widgets)
+                self._filter_groups.append({
+                    'frame': group_frame,
+                    'items': filter_items,
+                })
 
         # ── Control row ─────────────────────────────────────────────
         ctrl = ctk.CTkFrame(main, fg_color='transparent')
@@ -1344,6 +1394,7 @@ class SmallToolApp(ctk.CTk):
             fg_color=BG_INPUT, progress_color=ACCENT)
         self._prog_bar.set(0)
         self._prog_bar.pack(side='left', fill='x', expand=True, pady=7)
+        self._progress_display_mode = 'idle'
 
         self._prog_pct = ctk.CTkLabel(
             bar_row, text='', text_color=ACCENT,
@@ -1376,6 +1427,28 @@ class SmallToolApp(ctk.CTk):
         self._log_box.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
     # ── Selection helpers ────────────────────────────────────────────
+    def _toggle_categories(self):
+        self._set_categories_collapsed(not self._categories_collapsed)
+
+    def _set_categories_collapsed(self, collapsed: bool):
+        if not all(hasattr(self, name) for name in (
+                '_selection_panel', '_category_tabview',
+                '_category_filter_box', '_categories_toggle_btn')):
+            return
+        self._categories_collapsed = bool(collapsed)
+        if self._categories_collapsed:
+            self._category_filter_box.pack_forget()
+            self._category_tabview.pack_forget()
+            self._selection_panel.pack_configure(fill='x', expand=False)
+            button_text = T('st_categories_expand')
+        else:
+            self._category_filter_box.pack(side='right', padx=(0, 8))
+            self._category_tabview.pack(
+                fill='both', expand=True, padx=10, pady=(0, 10))
+            self._selection_panel.pack_configure(fill='both', expand=True)
+            button_text = T('st_categories_collapse')
+        self._categories_toggle_btn.configure(text=button_text)
+
     def _update_selected_count(self):
         if not hasattr(self, '_selected_count_lbl'):
             return
@@ -1388,12 +1461,32 @@ class SmallToolApp(ctk.CTk):
 
     def _filter_targets(self, *_args):
         query = self._category_filter_var.get().strip().casefold()
-        for widget, label in self._target_widgets:
+        visibility = []
+        for group in self._filter_groups:
+            group_matches = False
+            for widget, label in group['items']:
+                try:
+                    matches = not query or query in label
+                    if matches:
+                        widget.grid()
+                        group_matches = True
+                    else:
+                        widget.grid_remove()
+                except tk.TclError:
+                    pass
+            visibility.append((group, group_matches))
+
+        # Repack in registry order so empty groups do not leave large blank areas.
+        for group, _matches in visibility:
             try:
-                if not query or query in label:
-                    widget.grid()
-                else:
-                    widget.grid_remove()
+                group['frame'].pack_forget()
+            except tk.TclError:
+                pass
+        for group, matches in visibility:
+            if not matches:
+                continue
+            try:
+                group['frame'].pack(fill='x', padx=4, pady=5)
             except tk.TclError:
                 pass
 
@@ -1520,7 +1613,8 @@ class SmallToolApp(ctk.CTk):
         self._worker.start()
         self._start_btn.configure(state='disabled')
         self._stop_btn.configure(state='normal')
-        self._set_status_key('st_running', SUCCESS)
+        self._set_categories_collapsed(True)
+        self._set_status_key('st_scanning', ACCENT)
         self._log(T('st_started_msg'))
 
     def _stop_worker(self):
@@ -1548,12 +1642,16 @@ class SmallToolApp(ctk.CTk):
         if not self._save_selections_to_config(date_str):
             return
         self._check_now_btn.configure(state='disabled')
+        self._set_categories_collapsed(True)
+        self._set_status_key('st_scanning', ACCENT)
 
         def _once():
             cfg = load_config()
             try:
                 ok = self._worker._scan_and_download(cfg)
-                if not ok:
+                if ok:
+                    self._set_status_threadsafe('st_idle', TEXT_DIM)
+                else:
                     self._set_status_threadsafe('st_detect_failed', WARNING)
             except Exception as e:
                 self._log(f'[ERR] {e}')
@@ -1634,6 +1732,20 @@ class SmallToolApp(ctk.CTk):
         gen = self._build_gen
         self.after(500, lambda gen=gen: self._refresh_progress(gen))
 
+    def _set_progress_display_mode(self, mode: str):
+        if mode == self._progress_display_mode:
+            return
+        try:
+            self._prog_bar.stop()
+            if mode == 'scan':
+                self._prog_bar.configure(mode='indeterminate')
+                self._prog_bar.start()
+            else:
+                self._prog_bar.configure(mode='determinate')
+        except (tk.TclError, AttributeError):
+            return
+        self._progress_display_mode = mode
+
     def _refresh_progress(self, gen: int):
         if self._is_closing:
             return
@@ -1648,8 +1760,10 @@ class SmallToolApp(ctk.CTk):
                 pass
             return
         prog = self._worker.get_progress()
+        scan = self._worker.get_scan_state()
         try:
             if prog:
+                self._set_progress_display_mode('download')
                 done, total, speed, title = prog
                 if total > 0:
                     pct = int(done * 100 / total)
@@ -1664,8 +1778,19 @@ class SmallToolApp(ctk.CTk):
                     self._prog_pct.configure(text='')
                     self._prog_info.configure(text=T('st_preparing'))
                 short = title[:50] + '...' if len(title) > 50 else title
-                self._prog_title.configure(text=f'↓ {short}')
+                self._prog_title.configure(text=f'↓ {short}', text_color=TEXT_PRI)
+            elif scan:
+                self._set_progress_display_mode('scan')
+                site, category, page, eligible_count = scan
+                self._prog_pct.configure(text='')
+                self._prog_info.configure(
+                    text=T('st_candidates_found', count=eligible_count))
+                self._prog_title.configure(
+                    text=T('st_scan_progress', site=site,
+                           category=category, page=page),
+                    text_color=ACCENT)
             else:
+                self._set_progress_display_mode('idle')
                 self._prog_bar.set(0)
                 self._prog_pct.configure(text='')
                 self._prog_info.configure(text='')
