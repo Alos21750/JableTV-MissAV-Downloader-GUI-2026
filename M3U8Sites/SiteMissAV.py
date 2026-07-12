@@ -125,18 +125,18 @@ class MissAVBrowser:
     # Fixed category list: no language segment means MissAV default Traditional Chinese.
     # Non-empty language codes (e.g. 'cn', 'en', 'ja') are inserted as prefixes.
     CATEGORIES = [
-        ('今日熱門', 'https://missav.ai/dm296/today-hot'),
+        ('今日熱門', 'https://missav.ai/dm298/today-hot'),
         ('本週熱門', 'https://missav.ai/dm170/weekly-hot'),
-        ('本月熱門', 'https://missav.ai/dm266/monthly-hot'),
+        ('本月熱門', 'https://missav.ai/dm270/monthly-hot'),
         ('中文字幕', 'https://missav.ai/dm278/chinese-subtitle'),
         ('最近更新', 'https://missav.ai/dm539/new'),
-        ('新作上市', 'https://missav.ai/dm632/release'),
-        ('無碼流出', 'https://missav.ai/dm816/uncensored-leak'),
+        ('新作上市', 'https://missav.ai/dm634/release'),
+        ('無碼流出', 'https://missav.ai/dm817/uncensored-leak'),
         ('SIRO', 'https://missav.ai/dm36/siro'),
-        ('FC2', 'https://missav.ai/dm473/fc2'),
+        ('FC2', 'https://missav.ai/dm541/fc2'),
         ('麻豆傳媒', 'https://missav.ai/dm63/madou'),
         ('東京熱', 'https://missav.ai/dm42/tokyohot'),
-        ('一本道', 'https://missav.ai/dm4286298/1pondo'),
+        ('一本道', 'https://missav.ai/dm4854130/1pondo'),
     ]
 
     @classmethod

@@ -53,6 +53,7 @@ from M3U8Sites.SiteSupJav import (
     SiteSupJav,
     SupJavBrowser,
     _extract_m3u8,
+    _extract_packed_m3u8,
     _extract_title,
     _extract_tv_link,
     _parse_videos,
@@ -129,6 +130,7 @@ def test_parse_videos_uses_real_thumbnail_src_and_ignores_base64_placeholder():
     <div class="post">
       <a href="https://supjav.com/1.html" title="Home"></a>
       <img class="thumb" src="https://img.supjav.com/home.jpg">
+      <div class="meta">2026/07/12 <span>100 Views</span></div>
     </div>
     <div class="post">
       <a href="https://supjav.com/2.html" title="Category"></a>
@@ -141,7 +143,9 @@ def test_parse_videos_uses_real_thumbnail_src_and_ignores_base64_placeholder():
     ''', 'html.parser')
     videos = _parse_videos(soup)
     assert videos[0]['thumbnail'] == 'https://img.supjav.com/home.jpg'
+    assert videos[0]['date'] == '2026/07/12'
     assert videos[1]['thumbnail'] == 'https://img.supjav.com/category.jpg'
+    assert videos[1]['date'] == ''
     assert videos[2]['thumbnail'] == ''
 
 
@@ -291,6 +295,18 @@ def test_streamtape_direct_url_evaluates_js_substring_and_ignores_decoy():
     assert _streamtape_direct_url('<html>no robotlink</html>') is None
 
 
+def test_extract_packed_m3u8_keeps_signed_query(monkeypatch):
+    monkeypatch.setattr(
+        supjav_mod,
+        '_unpack_js_eval',
+        lambda _script: "var source='https://cdn.example/video/master.m3u8?t=abc&s=1';",
+    )
+    html = "<script>eval(function(p,a,c,k,e,d){/* m3u8 */})</script>"
+    assert _extract_packed_m3u8(html) == (
+        'https://cdn.example/video/master.m3u8?t=abc&s=1')
+    assert _extract_packed_m3u8('<script>plain</script>') is None
+
+
 def test_is_url_vaildate_accepts_direct_url_source():
     # Regression: the base gate is `True if self._m3u8url`; a Streamtape source has no
     # m3u8, only _direct_url. Without the override the caller silently skips the URL.
@@ -360,6 +376,86 @@ def test_direct_download_uses_parallel_ranges_and_assembles_file(monkeypatch, tm
     assert len(range_calls) == 4
 
 
+def test_direct_parallel_range_resumes_after_connection_reset(monkeypatch, tmp_path):
+    payload = bytes(range(256)) * 1024
+    calls = []
+    calls_lock = threading.Lock()
+    failed_once = False
+
+    class RangeResponse:
+        def __init__(self, start, end, fail=False):
+            self.status_code = 206
+            self.headers = {'content-range': f'bytes {start}-{end}/{len(payload)}'}
+            self._data = payload[start:end + 1]
+            self._fail = fail
+
+        def iter_content(self, chunk_size):
+            if self._fail:
+                cut = max(1, len(self._data) // 2)
+                yield self._data[:cut]
+                raise ConnectionResetError('reset by peer')
+            yield self._data
+
+        def close(self):
+            pass
+
+    class RangeSession:
+        def get(self, url, headers=None, **kwargs):
+            nonlocal failed_once
+            range_header = (headers or {}).get('Range')
+            start, end = (int(value) for value in range_header[6:].split('-', 1))
+            with calls_lock:
+                calls.append(range_header)
+                fail = start == 0 and end > 0 and not failed_once
+                if fail:
+                    failed_once = True
+            return RangeResponse(start, end, fail=fail)
+
+    monkeypatch.setattr(supjav_mod, '_get_session', lambda: RangeSession())
+    monkeypatch.setattr(supjav_mod, '_DIRECT_RETRY_BASE_DELAY', 0)
+    monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
+
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._cancel_job = False
+    crawler._dest_folder = str(tmp_path)
+    crawler._targetName = 'resumed'
+    crawler._direct_url = 'https://streamtape.example/get_video?id=test'
+    crawler._direct_referer = 'https://streamtape.example/e/test'
+    crawler._progress_callback = None
+    crawler._t2_executor = None
+
+    assert crawler._download_direct() is True
+    assert (tmp_path / 'resumed.mp4').read_bytes() == payload
+    initial_starts = {start for start, _end in supjav_mod._split_byte_ranges(len(payload))}
+    resumed_starts = {
+        int(value[6:].split('-', 1)[0])
+        for value in calls
+        if value != 'bytes=0-0'
+    } - initial_starts
+    assert resumed_starts
+
+
+def test_fst_hls_is_preferred_and_streamtape_is_fallback(monkeypatch):
+    crawler = SiteSupJav.__new__(SiteSupJav)
+    crawler._m3u8url = 'https://fst.example/master.m3u8'
+    crawler._direct_url = 'https://streamtape.example/video.mp4'
+    crawler._cancel_job = False
+    crawler.cleanup_temp = lambda: None
+    direct_calls = []
+    crawler._download_direct = lambda: direct_calls.append(True) or True
+
+    monkeypatch.setattr(crawler_mod.M3U8Crawler, 'start_download', lambda self: True)
+    assert crawler.start_download() is True
+    assert direct_calls == []
+
+    def fail_hls(self):
+        raise ConnectionError('FST unavailable')
+
+    monkeypatch.setattr(crawler_mod.M3U8Crawler, 'start_download', fail_hls)
+    assert crawler.start_download() is True
+    assert direct_calls == [True]
+
+
 def test_direct_download_keeps_serial_fallback_without_range_support(monkeypatch, tmp_path):
     payload = b'serial-fallback-data'
 
@@ -372,8 +468,10 @@ def test_direct_download_keeps_serial_fallback_without_range_support(monkeypatch
 
     class ProbeSession:
         def get(self, url, headers=None, **kwargs):
-            assert (headers or {}).get('Range') == 'bytes=0-0'
-            return ProbeResponse()
+            if (headers or {}).get('Range') == 'bytes=0-0':
+                return ProbeResponse()
+            assert 'Range' not in (headers or {})
+            return SerialResponse()
 
     class SerialResponse:
         status_code = 200
@@ -382,19 +480,7 @@ def test_direct_download_keeps_serial_fallback_without_range_support(monkeypatch
         def iter_content(self, chunk_size):
             yield payload
 
-    class SerialScraper:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def get(self, url, headers=None, **kwargs):
-            assert 'Range' not in (headers or {})
-            return SerialResponse()
-
     monkeypatch.setattr(supjav_mod, '_get_session', lambda: ProbeSession())
-    monkeypatch.setattr(supjav_mod, '_make_scraper', SerialScraper)
     monkeypatch.setattr(supjav_mod.speed_limiter, 'acquire', lambda _size: None)
 
     crawler = SiteSupJav.__new__(SiteSupJav)

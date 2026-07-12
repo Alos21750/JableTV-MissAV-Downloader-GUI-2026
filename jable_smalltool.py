@@ -2,7 +2,7 @@
 # coding: utf-8
 """Jable SmallTool — auto-downloader with site/category/date selection.
 
-Supports JableTV and MissAV. The user picks which sites, which categories
+Supports JableTV, MissAV, and SupJav. The user picks which sites and categories
 (multi-select), and a baseline date. The worker scans selected categories
 daily and downloads any new video it hasn't seen before.
 
@@ -61,9 +61,18 @@ except Exception:
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
+from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import fetch_with_mirrors, MirrorsBlockedError
 import config
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES
+from smalltool_categories import (
+    SITES,
+    find_target,
+    group_label,
+    iter_targets,
+    selection_key,
+    target_label,
+)
 
 # Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
 try:
@@ -75,7 +84,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.21'
+APP_VERSION = '2.5.22'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -87,38 +96,7 @@ DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
 
 # ── Site / category registry ────────────────────────────────────────
-# Each site entry: (display_name, browser_class, categories_list)
-# categories_list: [(cat_name, cat_url), ...]
-
-JABLE_CATEGORIES = [
-    ('最近更新', 'https://jable.tv/latest-updates/'),
-    ('熱門影片', 'https://jable.tv/hot/'),
-    ('新片上架', 'https://jable.tv/new-release/'),
-    ('中文字幕', 'https://jable.tv/categories/chinese-subtitle/'),
-]
-
-MISSAV_CATEGORIES = [
-    ('今日熱門', 'https://missav.ai/dm296/today-hot'),
-    ('本週熱門', 'https://missav.ai/dm170/weekly-hot'),
-    ('本月熱門', 'https://missav.ai/dm266/monthly-hot'),
-    ('中文字幕', 'https://missav.ai/dm278/chinese-subtitle'),
-    ('最近更新', 'https://missav.ai/dm539/new'),
-    ('新作上市', 'https://missav.ai/dm632/release'),
-    ('無碼流出', 'https://missav.ai/dm816/uncensored-leak'),
-    ('FC2', 'https://missav.ai/dm473/fc2'),
-    ('麻豆傳媒', 'https://missav.ai/dm63/madou'),
-]
-
-SITES = {
-    'JableTV': {
-        'browser': JableTVBrowser,
-        'categories': JABLE_CATEGORIES,
-    },
-    'MissAV': {
-        'browser': MissAVBrowser,
-        'categories': MISSAV_CATEGORIES,
-    },
-}
+# The grouped stable-ID registry lives in smalltool_categories.py.
 
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
@@ -222,7 +200,8 @@ def load_config() -> dict:
         'output_folder': '',
         'baseline_date': DEFAULT_BASELINE_DATE,
         'first_run_done': False,
-        'selected_targets': [],  # list of {"site": "JableTV", "category": "中文字幕"}
+        # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
+        'selected_targets': [],
     }
 
 
@@ -501,6 +480,14 @@ class SmallToolWorker:
         except Exception as e:
             return (None, f'ERR:{type(e).__name__}')
 
+    @staticmethod
+    def _parse_supjav_listing_date(value: str) -> Optional[datetime]:
+        try:
+            return datetime.strptime((value or '').strip(), '%Y/%m/%d').replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
     def _fetch_page_for_site(self, site_name: str, url: str) -> list:
         """Fetch a listing page using the appropriate browser for the site."""
         browser = SITES[site_name]['browser']
@@ -521,6 +508,8 @@ class SmallToolWorker:
                 new_url = re.sub(r'(/dm\d+/)', rf'\1{lang}/', cat_url)
                 return new_url
             return cat_url
+        if site_name == 'SupJav':
+            return SupJavBrowser._with_lang(cat_url, T('supjav_lang'))
         # JableTV does not expose language-specific listing variants.
         return cat_url
 
@@ -533,10 +522,7 @@ class SmallToolWorker:
             if '?' in base_url:
                 return f'{base_url}&from={page}'
             return f'{base_url}?from={page}'
-        else:
-            # MissAV uses ?page=N
-            sep = '&' if '?' in base_url else '?'
-            return f'{base_url}{sep}page={page}'
+        return SITES[site_name]['browser'].page_url(base_url, page)
 
     def _scan_and_download(self, cfg: dict):
         if not self._scan_lock.acquire(blocking=False):
@@ -579,23 +565,23 @@ class SmallToolWorker:
             if self._stop.is_set():
                 return False
             site_name = target['site']
-            cat_name = target['category']
-
-            # Find the URL for this category
-            cat_url = None
-            for name, url in SITES[site_name]['categories']:
-                if name == cat_name:
-                    cat_url = url
-                    break
-            if not cat_url:
+            if site_name not in SITES:
+                self._log(f'[WARN] site not found: {site_name}')
+                continue
+            cat = find_target(site_name, target.get('id'), target.get('category'))
+            if not cat:
+                cat_name = target.get('category') or target.get('id') or '?'
                 self._log(f'[WARN] category not found: {site_name}/{cat_name}')
                 continue
+            cat_name = target_label(cat)
+            cat_url = cat['url']
 
             self._log(f'── {site_name} / {cat_name} ──')
 
             base_url = self._category_fetch_url(site_name, cat_name, cat_url)
-            if site_name == 'JableTV' and '?' not in base_url:
-                base_url = f'{cat_url}?sort_by=post_date'
+            if site_name == 'JableTV' and 'sort_by=' not in base_url:
+                sep = '&' if '?' in base_url else '?'
+                base_url = f'{base_url}{sep}sort_by=post_date'
 
             max_pages = MAX_SCAN_PAGES if first_run else DAILY_SCAN_PAGES
             reached_baseline = False
@@ -657,8 +643,8 @@ class SmallToolWorker:
                             break
                         consecutive_skips = 0
                         self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
-                    else:
-                        # MissAV: fetch detail page for release date
+                    elif site_name == 'MissAV':
+                        # MissAV: fetch detail page for release date.
                         video_dt, rel_text = self._fetch_missav_video_date(vurl)
                         time.sleep(PER_VIDEO_FETCH_DELAY_SEC)
                         if rel_text == 'BLOCKED':
@@ -679,6 +665,30 @@ class SmallToolWorker:
                             consecutive_skips += 1
                             if consecutive_skips >= 10:
                                 self._log(f'  10 consecutive skips — moving to next category.')
+                                reached_baseline = True
+                                break
+                            continue
+                        consecutive_skips = 0
+                        self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
+                    else:
+                        # SupJav exposes YYYY/MM/DD directly on each listing card.
+                        rel_text = v.get('date', '')
+                        video_dt = self._parse_supjav_listing_date(rel_text)
+                        if video_dt is None:
+                            self._log(f'    [SKIP] no confirmed date ({rel_text!r}): {vurl}')
+                            consecutive_skips += 1
+                            if consecutive_skips >= 10:
+                                self._log('  10 consecutive skips — moving to next category.')
+                                reached_baseline = True
+                                break
+                            continue
+                        if video_dt < baseline_dt:
+                            slug = vurl.rstrip('/').split('/')[-1]
+                            self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
+                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            consecutive_skips += 1
+                            if consecutive_skips >= 10:
+                                self._log('  10 consecutive skips — moving to next category.')
                                 reached_baseline = True
                                 break
                             continue
@@ -830,7 +840,8 @@ class SmallToolApp(tk.Tk):
         self._status_fg = TEXT_DIM
         self._worker = SmallToolWorker(log_fn=self._enqueue_log,
                                        status_fn=self._set_status_threadsafe)
-        self._check_vars: dict[str, tk.BooleanVar] = {}  # "site|cat" -> BooleanVar
+        self._check_vars: dict[str, tk.BooleanVar] = {}  # stable "site|target-id" keys
+        self._target_widgets: list[tuple[object, str]] = []
 
         self._build_ui()
         self._load_selections_from_config()
@@ -938,10 +949,7 @@ class SmallToolApp(tk.Tk):
 
         for var in self._check_vars.values():
             var.set(False)
-        for target in snapshot['selected_targets']:
-            key = f'{target["site"]}|{target["category"]}'
-            if key in self._check_vars:
-                self._check_vars[key].set(True)
+        self._restore_target_checks(snapshot['selected_targets'])
         self._sync_select_all_vars()
 
         running = snapshot['running']
@@ -968,6 +976,7 @@ class SmallToolApp(tk.Tk):
                     pass
 
             self._check_vars = {}
+            self._target_widgets = []
             self._build_ui()
             self._restore_ui_state(snapshot)
             self._update_window_title()
@@ -1124,50 +1133,80 @@ class SmallToolApp(tk.Tk):
                              font=(font_family, 10, 'bold'), anchor='w')
         sel_label.pack(fill='x', padx=14, pady=(4, 2))
 
-        sel_container = tk.Frame(self, bg=BG_DARK)
-        sel_container.pack(fill='x', padx=14, pady=(0, 6))
+        filter_row = tk.Frame(self, bg=BG_DARK)
+        filter_row.pack(fill='x', padx=14, pady=(0, 4))
+        tk.Label(filter_row, text=T('st_filter_categories'), bg=BG_DARK,
+                 fg=TEXT_DIM, font=(font_family, 9)).pack(side='left')
+        self._category_filter_var = tk.StringVar()
+        filter_entry = tk.Entry(
+            filter_row, textvariable=self._category_filter_var,
+            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+            relief='flat', bd=3, font=(font_family, 9))
+        filter_entry.pack(side='left', fill='x', expand=True, padx=(8, 0))
+        self._category_filter_var.trace_add('write', self._filter_targets)
+
+        self._style.configure('SmallTool.TNotebook', background=BG_DARK, borderwidth=0)
+        self._style.configure('SmallTool.TNotebook.Tab', background=BG_INPUT,
+                              foreground=TEXT_SEC, padding=(14, 5))
+        self._style.map('SmallTool.TNotebook.Tab',
+                        background=[('selected', BG_CARD)],
+                        foreground=[('selected', ACCENT)])
+        notebook = ttk.Notebook(self, style='SmallTool.TNotebook', height=205)
+        notebook.pack(fill='x', padx=14, pady=(0, 6))
 
         for site_name, site_info in SITES.items():
-            site_frame = tk.LabelFrame(
-                sel_container, text=f'  {site_name}  ',
-                bg=BG_CARD, fg=ACCENT,
-                font=(font_family, 10, 'bold'),
-                bd=1, relief='groove',
-                highlightbackground=BORDER, highlightthickness=1,
-                padx=8, pady=6)
-            site_frame.pack(side='left', fill='both', expand=True, padx=(0, 8))
+            tab = tk.Frame(notebook, bg=BG_CARD)
+            notebook.add(tab, text=f'{site_name}  ({len(list(iter_targets(site_name)))})')
 
-            # "Select all" for this site
-            all_var = tk.BooleanVar(value=False)
-            all_key = f'{site_name}|__all__'
-            self._check_vars[all_key] = all_var
+            canvas = tk.Canvas(tab, bg=BG_CARD, highlightthickness=0, height=190)
+            scrollbar = ttk.Scrollbar(tab, orient='vertical', command=canvas.yview)
+            canvas.configure(yscrollcommand=scrollbar.set)
+            scrollbar.pack(side='right', fill='y')
+            canvas.pack(side='left', fill='both', expand=True)
 
-            all_cb = ttk.Checkbutton(
-                site_frame, text=T('st_select_all'),
-                style='All.TCheckbutton',
-                variable=all_var,
-                command=lambda sn=site_name: self._toggle_select_all(sn))
-            all_cb.pack(anchor='w', pady=(2, 0))
+            inner = tk.Frame(canvas, bg=BG_CARD)
+            window_id = canvas.create_window((0, 0), window=inner, anchor='nw')
+            inner.bind('<Configure>',
+                       lambda _e, c=canvas: c.configure(scrollregion=c.bbox('all')))
+            canvas.bind('<Configure>',
+                        lambda e, c=canvas, w=window_id: c.itemconfigure(w, width=e.width))
 
-            # Separator
-            tk.Frame(site_frame, bg=BORDER, height=1).pack(fill='x', pady=3)
+            for group in site_info['groups']:
+                group_frame = tk.LabelFrame(
+                    inner,
+                    text=f'  {group_label(group)} ({len(group["targets"])})  ',
+                    bg=BG_CARD, fg=ACCENT,
+                    font=(font_family, 9, 'bold'),
+                    bd=1, relief='groove', padx=6, pady=4)
+                group_frame.pack(fill='x', padx=6, pady=4)
 
-            # Category checkboxes in columns
-            cats = site_info['categories']
-            cat_grid = tk.Frame(site_frame, bg=BG_CARD)
-            cat_grid.pack(fill='x')
+                all_key = f'{site_name}|__group__|{group["id"]}'
+                all_var = tk.BooleanVar(value=False)
+                self._check_vars[all_key] = all_var
+                ttk.Checkbutton(
+                    group_frame, text=T('st_select_all'),
+                    style='All.TCheckbutton', variable=all_var,
+                    command=lambda sn=site_name, gid=group['id']:
+                        self._toggle_select_group(sn, gid),
+                ).grid(row=0, column=0, sticky='w', padx=6, pady=2)
 
-            cols = 3 if len(cats) > 6 else 2
-            for i, (cat_name, _) in enumerate(cats):
-                key = f'{site_name}|{cat_name}'
-                var = tk.BooleanVar(value=False)
-                self._check_vars[key] = var
-                cb = ttk.Checkbutton(
-                    cat_grid, text=cat_name,
-                    style='Cat.TCheckbutton',
-                    variable=var)
-                row, col = divmod(i, cols)
-                cb.grid(row=row, column=col, sticky='w', padx=6, pady=2)
+                cat_grid = tk.Frame(group_frame, bg=BG_CARD)
+                cat_grid.grid(row=1, column=0, sticky='ew')
+                for col in range(3):
+                    cat_grid.grid_columnconfigure(col, weight=1)
+                for i, target in enumerate(group['targets']):
+                    label = target_label(target)
+                    key = selection_key(site_name, target['id'])
+                    var = tk.BooleanVar(value=False)
+                    self._check_vars[key] = var
+                    cb = ttk.Checkbutton(
+                        cat_grid, text=label,
+                        style='Cat.TCheckbutton', variable=var,
+                        command=lambda sn=site_name, gid=group['id']:
+                            self._sync_group_select(sn, gid))
+                    row, col = divmod(i, 3)
+                    cb.grid(row=row, column=col, sticky='w', padx=6, pady=2)
+                    self._target_widgets.append((cb, label.casefold()))
 
         # ── Control row ─────────────────────────────────────────────
         ctrl = tk.Frame(self, bg=BG_DARK)
@@ -1252,29 +1291,65 @@ class SmallToolApp(tk.Tk):
             bg=BG_DARK, fg=TEXT_DIM, font=(font_family, 9)).pack(pady=(0, 8))
 
     # ── Selection helpers ────────────────────────────────────────────
-    def _toggle_select_all(self, site_name: str):
-        all_key = f'{site_name}|__all__'
+    def _filter_targets(self, *_args):
+        query = self._category_filter_var.get().strip().casefold()
+        for widget, label in self._target_widgets:
+            try:
+                if not query or query in label:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+            except tk.TclError:
+                pass
+
+    def _toggle_select_group(self, site_name: str, group_id: str):
+        all_key = f'{site_name}|__group__|{group_id}'
         val = self._check_vars[all_key].get()
-        for cat_name, _ in SITES[site_name]['categories']:
-            key = f'{site_name}|{cat_name}'
-            self._check_vars[key].set(val)
+        group = next(g for g in SITES[site_name]['groups'] if g['id'] == group_id)
+        for target in group['targets']:
+            self._check_vars[selection_key(site_name, target['id'])].set(val)
+
+    def _sync_group_select(self, site_name: str, group_id: str):
+        group = next(g for g in SITES[site_name]['groups'] if g['id'] == group_id)
+        all_key = f'{site_name}|__group__|{group_id}'
+        target_keys = [selection_key(site_name, target['id'])
+                       for target in group['targets']]
+        self._check_vars[all_key].set(
+            bool(target_keys) and
+            all(self._check_vars[key].get() for key in target_keys))
 
     def _sync_select_all_vars(self):
         for site_name, site_info in SITES.items():
-            all_key = f'{site_name}|__all__'
-            if all_key not in self._check_vars:
-                continue
-            cat_keys = [f'{site_name}|{cat_name}' for cat_name, _ in site_info['categories']]
-            self._check_vars[all_key].set(all(self._check_vars[key].get() for key in cat_keys))
+            for group in site_info['groups']:
+                all_key = f'{site_name}|__group__|{group["id"]}'
+                if all_key in self._check_vars:
+                    self._sync_group_select(site_name, group['id'])
 
     def _get_selected_targets(self) -> list[dict]:
         targets = []
-        for site_name, site_info in SITES.items():
-            for cat_name, _ in site_info['categories']:
-                key = f'{site_name}|{cat_name}'
-                if self._check_vars.get(key, tk.BooleanVar()).get():
-                    targets.append({'site': site_name, 'category': cat_name})
+        for site_name in SITES:
+            for target in iter_targets(site_name):
+                key = selection_key(site_name, target['id'])
+                var = self._check_vars.get(key)
+                if var is not None and var.get():
+                    targets.append({
+                        'site': site_name,
+                        'id': target['id'],
+                        'category': target['name'],
+                    })
         return targets
+
+    def _restore_target_checks(self, targets):
+        for saved in targets:
+            site_name = saved.get('site')
+            if site_name not in SITES:
+                continue
+            target = find_target(site_name, saved.get('id'), saved.get('category'))
+            if not target:
+                continue
+            key = selection_key(site_name, target['id'])
+            if key in self._check_vars:
+                self._check_vars[key].set(True)
 
     def _validate_baseline_date(self) -> Optional[str]:
         date_str = self._date_var.get().strip()
@@ -1296,11 +1371,7 @@ class SmallToolApp(tk.Tk):
         return True
 
     def _load_selections_from_config(self):
-        targets = self._cfg.get('selected_targets', [])
-        for t in targets:
-            key = f'{t["site"]}|{t["category"]}'
-            if key in self._check_vars:
-                self._check_vars[key].set(True)
+        self._restore_target_checks(self._cfg.get('selected_targets', []))
 
     # ── Handlers ─────────────────────────────────────────────────────
     def _pick_folder(self):
@@ -1338,7 +1409,13 @@ class SmallToolApp(tk.Tk):
             return
 
         sites_summary = ', '.join(set(t['site'] for t in targets))
-        cats_summary = ', '.join(t['category'] for t in targets)
+        cat_names = []
+        for saved in targets:
+            target = find_target(saved['site'], saved.get('id'), saved.get('category'))
+            cat_names.append(target_label(target) if target else saved.get('category', '?'))
+        cats_summary = ', '.join(cat_names[:12])
+        if len(cat_names) > 12:
+            cats_summary += f' … (+{len(cat_names) - 12})'
         self._log(T('st_target_log', sites=sites_summary, categories=cats_summary))
         self._log(T('st_baseline_log', date=date_str))
 

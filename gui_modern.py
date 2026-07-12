@@ -32,7 +32,7 @@ from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
 
-APP_VERSION = '2.5.21'
+APP_VERSION = '2.5.22'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -2378,6 +2378,15 @@ class ModernApp(ctk.CTk):
         if count:
             print(f'已加入 {count} 個下載任務')
 
+    def _retry_download(self, url: str):
+        item = next((i for i in self._dlmgr.get_items() if i.url == url), None)
+        if item is None:
+            return
+        item.progress = 0
+        item.speed = ''
+        item.error = ''
+        self._dlmgr.enqueue(url, item.dest or self._dest_var.get() or 'download')
+
     def _cancel_all(self):
         self._dlmgr.cancel_all()
 
@@ -2709,11 +2718,20 @@ class ModernApp(ctk.CTk):
                 command=lambda u=item.url: self._dlmgr.remove_item(u))
             remove_btn.pack(side='right', padx=(6, 12))
 
+            retry_btn = ctk.CTkButton(
+                row, text='↻', width=30, height=30,
+                corner_radius=8,
+                fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                hover_color=BG_CARD_HOVER,
+                text_color=ACCENT, font=('Consolas', 14, 'bold'),
+                command=lambda u=item.url: self._retry_download(u))
+
             widgets = {
                 'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
                 'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
-                '_before_remove': remove_btn,
+                'retry_btn': retry_btn, '_before_remove': remove_btn,
                 'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
+                'retry_visible': False,
                 'last_state': None, 'last_name': None, 'last_error': None,
                 'last_progress': -1, 'last_speed': None,
             }
@@ -2755,6 +2773,17 @@ class ModernApp(ctk.CTk):
                 return
             w['last_name'] = display_name
             w['last_error'] = item.error
+
+        retryable = item.state in ('未完成', '封鎖/解析失敗', '已取消')
+        if retryable and not w['retry_visible']:
+            w['retry_btn'].pack(side='right', padx=(2, 0), before=w['_before_remove'])
+            w['retry_visible'] = True
+        elif not retryable and w['retry_visible']:
+            try:
+                w['retry_btn'].pack_forget()
+            except Exception:
+                pass
+            w['retry_visible'] = False
 
         # Progress bar: show only while downloading
         is_downloading = (item.state == '下載中' and item.progress > 0)

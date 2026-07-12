@@ -225,3 +225,30 @@ def test__visible_window_prioritizes_active():
     visible = _visible_window(items, 3)
 
     assert [item.state for item in visible] == ['下載中', '等待中', '未完成']
+
+
+def test_row_retry_resets_transient_fields_and_requeues():
+    item = DownloadItem(
+        'https://supjav.com/12345.html', state='未完成', dest=r'C:\Videos')
+    item.progress = 44
+    item.speed = '2 MB/s'
+    item.error = 'reset by peer'
+
+    class FakeManager:
+        def __init__(self):
+            self.calls = []
+
+        def get_items(self):
+            return [item]
+
+        def enqueue(self, url, dest):
+            self.calls.append((url, dest))
+
+    app = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
+    app._dlmgr = FakeManager()
+    app._dest_var = types.SimpleNamespace(get=lambda: r'C:\Fallback')
+
+    app._retry_download(item.url)
+
+    assert (item.progress, item.speed, item.error) == (0, '', '')
+    assert app._dlmgr.calls == [(item.url, r'C:\Videos')]

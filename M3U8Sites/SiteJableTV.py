@@ -326,9 +326,12 @@ class JableTVBrowser:
                 text = a.get_text(strip=True)
                 if '/categories/' in href and href != f'{cls._url_root}/categories/' and text:
                     name = text
-                    count_match = re.search(r'(\d[\d,]*)\s*部影片', text)
+                    count_match = re.search(
+                        r'(\d[\d,]*)\s*(?:部影片|videos?)', text, re.I)
                     count = int(count_match.group(1).replace(',', '')) if count_match else 0
-                    name = re.sub(r'\d[\d,]*\s*部影片', '', name).strip()
+                    name = re.sub(
+                        r'\d[\d,]*\s*(?:部影片|videos?)', '', name,
+                        flags=re.I).strip()
                     slug = href.rstrip('/').split('/')[-1]
                     cats.append({'name': site_i18n.loc(site_i18n.CATEGORY_I18N, href, name),
                                  'slug': slug, 'url': href, 'count': count})

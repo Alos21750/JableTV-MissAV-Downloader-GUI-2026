@@ -135,8 +135,8 @@ def test_missav_language_paths_use_empty_string_for_default(monkeypatch):
     default_cats = MissAVBrowser.fetch_categories()
     cn_cats = MissAVBrowser.fetch_categories(lang='cn')
 
-    assert default_cats[0]['url'] == 'https://missav.ai/dm296/today-hot'
-    assert cn_cats[0]['url'] == 'https://missav.ai/dm296/cn/today-hot'
+    assert default_cats[0]['url'] == 'https://missav.ai/dm298/today-hot'
+    assert cn_cats[0]['url'] == 'https://missav.ai/dm298/cn/today-hot'
 
     called = []
     monkeypatch.setattr(

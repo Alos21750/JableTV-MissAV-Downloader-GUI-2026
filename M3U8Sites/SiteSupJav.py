@@ -13,9 +13,10 @@ try:
 except ImportError:
     _use_cffi = False
 import threading as _threading
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from M3U8Sites.M3U8Crawler import *
 from M3U8Sites.M3U8Crawler import _get_session
+from M3U8Sites.SiteMissAV import _unpack_js_eval
 from bs4 import BeautifulSoup
 import site_i18n
 
@@ -23,6 +24,8 @@ import site_i18n
 SUPREMEJAV = 'https://lk1.supremejav.com/supjav.php?c={}'
 _BLOCKED_MSG = "所有鏡像都被 Cloudflare 阻擋（可能是你的網路/IP 信譽問題，請改用 VPN 或不同網路）"
 _DIRECT_RANGE_WORKERS = 4
+_DIRECT_RANGE_RETRIES = 4
+_DIRECT_RETRY_BASE_DELAY = 1.0
 
 _browser_scraper = None
 _browser_scraper_lock = _threading.Lock()
@@ -107,6 +110,23 @@ def _streamtape_direct_url(html_text):
     return 'https://' + link
 
 
+def _extract_packed_m3u8(html_text):
+    """Extract an HLS URL from an fc2stream/FST Dean-Edwards packed script."""
+    for script in re.findall(r'<script[^>]*>(.*?)</script>', html_text, re.DOTALL):
+        if 'eval(function' not in script or 'm3u8' not in script:
+            continue
+        unpacked = _unpack_js_eval(script)
+        if not unpacked:
+            continue
+        match = re.search(
+            r"https?://[^'\"\\;\s]+\.m3u8[^'\"\\;\s]*",
+            unpacked,
+        )
+        if match:
+            return match.group(0)
+    return None
+
+
 def _content_range(value):
     match = re.fullmatch(r'bytes\s+(\d+)-(\d+)/(\d+)', str(value or '').strip(), re.I)
     if not match:
@@ -148,7 +168,18 @@ def _parse_videos(soup):
             src = img.get('src') or ''
             if not src.startswith('data:'):
                 thumbnail = src
-        videos.append({'url': video_url, 'title': title, 'thumbnail': thumbnail, 'duration': ''})
+        meta = post.select_one('div.meta')
+        date_match = re.search(
+            r'(?<!\d)(20\d{2}/\d{1,2}/\d{1,2})(?!\d)',
+            meta.get_text(' ', strip=True) if meta else '',
+        )
+        videos.append({
+            'url': video_url,
+            'title': title,
+            'thumbnail': thumbnail,
+            'duration': '',
+            'date': date_match.group(1) if date_match else '',
+        })
     return videos
 
 
@@ -180,9 +211,32 @@ class SiteSupJav(M3U8Crawler):
                 raise Exception("此影片沒有可用的伺服器來源（版面改版？）")
 
             m3u8url = None
-            # 1) Streamtape (ST): a direct progressive MP4 — PREFERRED, because SupJav's
-            #    TV server now serves TS segments from auth-gated Google Drive that return
-            #    a sign-in/403/429 to any non-browser client, so they can't be downloaded (#29).
+            m3u8_headers = None
+            # 1) FST: downloadable HLS with real 480p/720p/1080p variants (#31).
+            if 'FST' in servers:
+                try:
+                    fst = scraper.get(
+                        SUPREMEJAV.format(servers['FST'][::-1]),
+                        headers={'Referer': 'https://supjav.com/'},
+                        timeout=25,
+                        allow_redirects=True,
+                    )
+                    m3u8url = _extract_packed_m3u8(fst.text)
+                    if m3u8url:
+                        parts = urlsplit(str(getattr(fst, 'url', '') or ''))
+                        origin = (f'{parts.scheme}://{parts.netloc}'
+                                  if parts.scheme and parts.netloc else '')
+                        m3u8_headers = {'Referer': str(fst.url)}
+                        if origin:
+                            m3u8_headers['Origin'] = origin
+                except MirrorsBlockedError:
+                    raise
+                except Exception:
+                    m3u8url = None
+                    m3u8_headers = None
+
+            # 2) Streamtape (ST): progressive MP4 fallback. Resolve it even when FST
+            #    works so an HLS failure can downgrade without rescanning the page.
             if 'ST' in servers:
                 try:
                     emb = scraper.get(SUPREMEJAV.format(servers['ST'][::-1]),
@@ -196,15 +250,17 @@ class SiteSupJav(M3U8Crawler):
                     raise
                 except Exception:
                     pass
-            # 2) TV: HLS m3u8 — fallback (works for videos SupJav hasn't migrated, and if
-            #    they ever revert). May resolve but fail at segment fetch when Google-gated.
-            if not self._direct_url and 'TV' in servers:
+            # 3) TV: last HLS fallback (its Google-backed segments often return 429).
+            #    Keep it for videos SupJav has not migrated to either FST or ST.
+            if not m3u8url and not self._direct_url and 'TV' in servers:
                 try:
                     r2 = scraper.get(SUPREMEJAV.format(servers['TV'][::-1]),
                                      headers={'Referer': 'https://supjav.com/'}, timeout=20)
                     if getattr(r2, 'status_code', 0) in (403, 429, 503):
                         raise MirrorsBlockedError(_BLOCKED_MSG)
                     m3u8url = _extract_m3u8(r2.text)
+                    if m3u8url:
+                        m3u8_headers = {'Referer': 'https://supjav.com/'}
                 except MirrorsBlockedError:
                     raise
                 except Exception:
@@ -212,13 +268,13 @@ class SiteSupJav(M3U8Crawler):
 
             if not self._direct_url and not m3u8url:
                 raise Exception("此影片目前無可用下載來源"
-                                "（SupJav TV 來源已改用受 Google 登入保護的區段，且此片無 Streamtape 備援）")
+                                "（TV 區段受 Google 限制，且此片無 FST/Streamtape 備援）")
 
         title = _extract_title(soup)
         self._targetName = html.unescape(title)
         self._imageUrl = None
         self._m3u8url = m3u8url
-        self._extra_headers = {'Referer': 'https://supjav.com/'}
+        self._extra_headers = m3u8_headers or {'Referer': 'https://supjav.com/'}
 
     def is_url_vaildate(self):
         # The base gate is `True if self._m3u8url` — but a Streamtape source resolves to
@@ -228,8 +284,16 @@ class SiteSupJav(M3U8Crawler):
         return bool(self._m3u8url or getattr(self, '_direct_url', None))
 
     def start_download(self):
-        # A Streamtape source is a single progressive MP4 — download it directly,
-        # bypassing the HLS segment/decrypt/merge pipeline the m3u8 path uses.
+        # Prefer FST HLS because it preserves the requested quality (including 1080p).
+        # If it fails, automatically downgrade to the Streamtape progressive MP4.
+        if self._m3u8url:
+            try:
+                return super().start_download()
+            except Exception:
+                if self._cancel_job or not getattr(self, '_direct_url', None):
+                    raise
+                print('\n[SupJav] FST HLS failed; falling back to Streamtape.', flush=True)
+                self.cleanup_temp()
         if getattr(self, '_direct_url', None):
             return self._download_direct()
         return super().start_download()
@@ -256,7 +320,15 @@ class SiteSupJav(M3U8Crawler):
         ref = self._direct_referer or 'https://supjav.com/'
         start = time.time()
         try:
-            ranged = self._download_direct_ranges(part, ref, start)
+            try:
+                ranged = self._download_direct_ranges(part, ref, start)
+            except Exception:
+                if self._cancel_job:
+                    raise
+                print('\n[SupJav] Parallel ranges failed; retrying with one resumable connection.',
+                      flush=True)
+                self._safe_remove(part)
+                ranged = None
             if ranged is None:
                 done, total = self._download_direct_serial(part, ref, start)
             else:
@@ -320,49 +392,70 @@ class SiteSupJav(M3U8Crawler):
             nonlocal done
             range_start, range_end = bounds
             expected = range_end - range_start + 1
-            response = session.get(
-                self._direct_url,
-                headers={'Referer': ref, 'Range': f'bytes={range_start}-{range_end}'},
-                timeout=60,
-                stream=True,
-                allow_redirects=True,
-            )
-            try:
-                response_range = _content_range(
-                    getattr(response, 'headers', {}).get('content-range'))
-                if (getattr(response, 'status_code', 0) != 206 or
-                        response_range != (range_start, range_end, total)):
-                    raise Exception("直接下載來源未正確回應分段請求")
-
-                written = 0
-                with open(part, 'r+b', buffering=0) as target:
-                    target.seek(range_start)
-                    for chunk in response.iter_content(chunk_size=262144):
-                        if self._cancel_job or stop_event.is_set():
-                            break
-                        if not chunk:
-                            continue
-                        if written + len(chunk) > expected:
-                            raise Exception("直接下載分段長度超出預期")
-                        speed_limiter.acquire(len(chunk))
-                        if target.write(chunk) != len(chunk):
-                            raise Exception("直接下載寫入失敗")
-                        written += len(chunk)
-                        with progress_lock:
-                            done += len(chunk)
-                            current_done = done
-                            elapsed = time.time() - start_time
-                            speed = current_done / elapsed if elapsed > 0 else 0
-                            if self._progress_callback:
-                                self._progress_callback(current_done, total, speed)
-                if not self._cancel_job and not stop_event.is_set() and written != expected:
-                    raise Exception("直接下載分段不完整（連線中斷？請重試）")
-                return written
-            finally:
+            written = 0
+            retries = 0
+            while written < expected and not self._cancel_job and not stop_event.is_set():
+                cursor = range_start + written
+                response = None
                 try:
-                    response.close()
+                    response = session.get(
+                        self._direct_url,
+                        headers={'Referer': ref, 'Range': f'bytes={cursor}-{range_end}'},
+                        timeout=60,
+                        stream=True,
+                        allow_redirects=True,
+                    )
+                    response_range = _content_range(
+                        getattr(response, 'headers', {}).get('content-range'))
+                    if (getattr(response, 'status_code', 0) != 206 or
+                            response_range != (cursor, range_end, total)):
+                        raise Exception("直接下載來源未正確回應分段請求")
+
+                    received = 0
+                    with open(part, 'r+b', buffering=0) as target:
+                        target.seek(cursor)
+                        for chunk in response.iter_content(chunk_size=262144):
+                            if self._cancel_job or stop_event.is_set():
+                                break
+                            if not chunk:
+                                continue
+                            if written + len(chunk) > expected:
+                                raise Exception("直接下載分段長度超出預期")
+                            speed_limiter.acquire(len(chunk))
+                            if target.write(chunk) != len(chunk):
+                                raise Exception("直接下載寫入失敗")
+                            written += len(chunk)
+                            received += len(chunk)
+                            with progress_lock:
+                                done += len(chunk)
+                                current_done = done
+                                elapsed = time.time() - start_time
+                                speed = current_done / elapsed if elapsed > 0 else 0
+                                if self._progress_callback:
+                                    self._progress_callback(current_done, total, speed)
+
+                    if self._cancel_job or stop_event.is_set():
+                        break
+                    if written < expected:
+                        detail = "未收到資料" if received == 0 else "連線提前結束"
+                        raise Exception(f"直接下載分段{detail}")
                 except Exception:
-                    pass
+                    if self._cancel_job or stop_event.is_set():
+                        break
+                    retries += 1
+                    if retries > _DIRECT_RANGE_RETRIES:
+                        raise
+                    stop_event.wait(_DIRECT_RETRY_BASE_DELAY * retries)
+                finally:
+                    if response is not None:
+                        try:
+                            response.close()
+                        except Exception:
+                            pass
+
+            if not self._cancel_job and not stop_event.is_set() and written != expected:
+                raise Exception("直接下載分段不完整（連線中斷？請重試）")
+            return written
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(ranges))
         self._t2_executor = executor
@@ -386,30 +479,76 @@ class SiteSupJav(M3U8Crawler):
         return done, total
 
     def _download_direct_serial(self, part, ref, start_time):
-        done = 0
+        done = os.path.getsize(part) if os.path.exists(part) else 0
         total = 0
-        with _make_scraper() as scraper:
-            resp = scraper.get(self._direct_url, headers={'Referer': ref},
-                               timeout=60, stream=True, allow_redirects=True)
-            if getattr(resp, 'status_code', 0) != 200:
-                raise Exception(f"直接下載失敗 (HTTP {getattr(resp, 'status_code', '?')})")
+        retries = 0
+        session = _get_session()
+        while not self._cancel_job:
+            request_headers = {'Referer': ref}
+            if done:
+                request_headers['Range'] = f'bytes={done}-'
+            resp = None
             try:
-                total = int(resp.headers.get('content-length') or 0)
+                resp = session.get(
+                    self._direct_url,
+                    headers=request_headers,
+                    timeout=60,
+                    stream=True,
+                    allow_redirects=True,
+                )
+                status = getattr(resp, 'status_code', 0)
+                response_range = _content_range(
+                    getattr(resp, 'headers', {}).get('content-range'))
+                if done:
+                    if status != 206 or not response_range or response_range[0] != done:
+                        raise Exception(f"直接續傳失敗 (HTTP {status})")
+                    total = response_range[2]
+                elif status == 206 and response_range:
+                    total = response_range[2]
+                elif status == 200:
+                    try:
+                        total = int(resp.headers.get('content-length') or 0)
+                    except Exception:
+                        total = 0
+                else:
+                    raise Exception(f"直接下載失敗 (HTTP {status})")
+
+                received = 0
+                with open(part, 'ab' if done else 'wb') as target:
+                    for chunk in resp.iter_content(chunk_size=262144):
+                        if self._cancel_job:
+                            break
+                        if not chunk:
+                            continue
+                        speed_limiter.acquire(len(chunk))
+                        target.write(chunk)
+                        done += len(chunk)
+                        received += len(chunk)
+                        elapsed = time.time() - start_time
+                        speed = done / elapsed if elapsed > 0 else 0
+                        if self._progress_callback and total > 0:
+                            self._progress_callback(done, total, speed)
+
+                if self._cancel_job:
+                    break
+                if total > 0 and done >= total:
+                    return done, total
+                if total == 0 and received > 0:
+                    return done, done
+                raise Exception("直接下載連線提前結束")
             except Exception:
-                total = 0
-            with open(part, 'wb') as target:
-                for chunk in resp.iter_content(chunk_size=262144):
-                    if self._cancel_job:
-                        break
-                    if not chunk:
-                        continue
-                    speed_limiter.acquire(len(chunk))
-                    target.write(chunk)
-                    done += len(chunk)
-                    elapsed = time.time() - start_time
-                    speed = done / elapsed if elapsed > 0 else 0
-                    if self._progress_callback and total > 0:
-                        self._progress_callback(done, total, speed)
+                if self._cancel_job:
+                    break
+                retries += 1
+                if retries > _DIRECT_RANGE_RETRIES:
+                    raise
+                time.sleep(_DIRECT_RETRY_BASE_DELAY * retries)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
         return done, total
 
 
@@ -419,6 +558,7 @@ class SupJavBrowser:
 
     CATEGORIES = [
         ('最近更新', 'https://supjav.com/'),
+        ('熱門總榜', 'https://supjav.com/popular'),
         ('本週熱門', 'https://supjav.com/popular?sort=week'),
         ('本月熱門', 'https://supjav.com/popular?sort=month'),
         ('無碼', 'https://supjav.com/category/uncensored-jav'),
