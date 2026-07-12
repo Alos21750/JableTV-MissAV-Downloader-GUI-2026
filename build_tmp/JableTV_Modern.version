@@ -31,11 +31,11 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'ALOS (Alos21750)'),
         StringStruct('FileDescription', 'JableTV & MissAV Video Downloader GUI'),
-        StringStruct('FileVersion', '2.5.25.0'),
+        StringStruct('FileVersion', '2.5.26.0'),
         StringStruct('InternalName', 'JableTV_Modern'),
         StringStruct('OriginalFilename', 'JableTV_Modern.exe'),
         StringStruct('ProductName', 'JableTV & MissAV Downloader'),
-        StringStruct('ProductVersion', '2.5.25.0')])
+        StringStruct('ProductVersion', '2.5.26.0')])
       ]), 
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

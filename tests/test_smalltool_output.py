@@ -20,6 +20,7 @@ def test_blank_saved_folder_falls_back_to_tmp_beside_app(monkeypatch, tmp_path):
     cfg = jable_smalltool.load_config()
 
     assert cfg['output_folder'] == str(app_dir / 'tmp')
+    assert cfg['missav_version_preference'] == 'chinese-subtitle'
 
 
 def test_missing_config_uses_tmp_beside_app(monkeypatch, tmp_path):
@@ -33,3 +34,4 @@ def test_missing_config_uses_tmp_beside_app(monkeypatch, tmp_path):
     cfg = jable_smalltool.load_config()
 
     assert cfg['output_folder'] == str(app_dir / 'tmp')
+    assert cfg['missav_version_preference'] == 'chinese-subtitle'

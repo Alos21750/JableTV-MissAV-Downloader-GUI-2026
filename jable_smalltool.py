@@ -94,7 +94,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.25'
+APP_VERSION = '2.5.26'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -105,6 +105,9 @@ MAX_SCAN_PAGES = 50
 DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
 MISSAV_VERSION_SUFFIXES = ('-uncensored-leak', '-chinese-subtitle')
+DEFAULT_MISSAV_VERSION_PREFERENCE = 'chinese-subtitle'
+_VALID_MISSAV_VERSION_PREFERENCES = {
+    'chinese-subtitle', 'uncensored-leak', 'standard'}
 
 # ── Site / category registry ────────────────────────────────────────
 # The grouped stable-ID registry lives in smalltool_categories.py.
@@ -153,12 +156,20 @@ def _missav_video_code(video: dict) -> str:
     return slug
 
 
-def _is_missav_uncensored_leak(video: dict) -> bool:
-    return _missav_slug(video).endswith('-uncensored-leak')
+def _missav_video_version(video: dict) -> str:
+    slug = _missav_slug(video)
+    for suffix in MISSAV_VERSION_SUFFIXES:
+        if slug.endswith(suffix):
+            return suffix[1:]
+    return 'standard'
 
 
-def _dedupe_missav_candidates(videos: list[dict]):
-    """Keep one MissAV item per code, preferring the uncensored-leak version."""
+def _dedupe_missav_candidates(
+        videos: list[dict],
+        preference: str = DEFAULT_MISSAV_VERSION_PREFERENCE):
+    """Keep one MissAV item per code, preferring the selected version."""
+    if preference not in _VALID_MISSAV_VERSION_PREFERENCES:
+        preference = DEFAULT_MISSAV_VERSION_PREFERENCE
     kept = []
     missav_indexes = {}
     decisions = []
@@ -182,8 +193,8 @@ def _dedupe_missav_candidates(videos: list[dict]):
         existing = kept[existing_index]
         if existing.get('url') == video.get('url'):
             continue
-        if (_is_missav_uncensored_leak(video) and
-                not _is_missav_uncensored_leak(existing)):
+        if (_missav_video_version(video) == preference and
+                _missav_video_version(existing) != preference):
             kept[existing_index] = video
             decisions.append((existing, video, code))
         else:
@@ -241,6 +252,15 @@ CONFIG_PATH = os.path.join(STATE_DIR, 'config.json')
 SEEN_PATH = os.path.join(STATE_DIR, 'seen.json')
 _VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 
+
+def _normalize_missav_version_pref(cfg: dict) -> str:
+    pref = cfg.get('missav_version_preference')
+    if isinstance(pref, str):
+        pref = pref.strip().lower()
+        if pref in _VALID_MISSAV_VERSION_PREFERENCES:
+            return pref
+    return DEFAULT_MISSAV_VERSION_PREFERENCE
+
 # ── Persistence ──────────────────────────────────────────────────────
 def _ensure_state_dir() -> None:
     try:
@@ -267,12 +287,15 @@ def load_config() -> dict:
             if isinstance(cfg, dict):
                 if not str(cfg.get('output_folder') or '').strip():
                     cfg['output_folder'] = _default_output_folder()
+                cfg['missav_version_preference'] = (
+                    _normalize_missav_version_pref(cfg))
                 return cfg
         except Exception:
             pass
     return {
         'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
+        'missav_version_preference': DEFAULT_MISSAV_VERSION_PREFERENCE,
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
         'selected_targets': [],
@@ -623,6 +646,8 @@ class SmallToolWorker:
     def _scan_and_download_locked(self, cfg: dict):
         dest = str(cfg.get('output_folder') or '').strip() or _default_output_folder()
         cfg['output_folder'] = dest
+        version_preference = _normalize_missav_version_pref(cfg)
+        cfg['missav_version_preference'] = version_preference
         os.makedirs(dest, exist_ok=True)
 
         targets = cfg.get('selected_targets', [])
@@ -704,7 +729,13 @@ class SmallToolWorker:
                     if not vurl:
                         continue
                     with self._seen_lock:
-                        if vurl in self._seen:
+                        seen_entry = self._seen.get(vurl)
+                    if seen_entry:
+                        reconsider_preferred = (
+                            site_name == 'MissAV' and
+                            seen_entry.get('reason') == 'duplicate-version' and
+                            _missav_video_version(v) == version_preference)
+                        if not reconsider_preferred:
                             continue
                     page_all_seen = False
 
@@ -803,16 +834,18 @@ class SmallToolWorker:
             return True
 
         all_new_videos, dedupe_decisions = _dedupe_missav_candidates(
-            all_new_videos)
+            all_new_videos, version_preference)
         for dropped, kept, code in dedupe_decisions:
             dropped_slug = _missav_slug(dropped)
             kept_slug = _missav_slug(kept)
             self._log(
-                f'  [DEDUP] {code}: keep {kept_slug}; skip {dropped_slug}')
+                f'  [DEDUP] {code}: keep {kept_slug}; skip {dropped_slug} '
+                f'(preference: {version_preference})')
             dropped_url = dropped.get('url', '')
             if dropped_url and dropped_url != kept.get('url', ''):
                 self._mark_seen(
-                    dropped_url, dropped.get('title', ''), skipped=True)
+                    dropped_url, dropped.get('title', ''), skipped=True,
+                    reason='duplicate-version')
 
         self._set_scan_state()
         self._set_status('st_downloading', ACCENT)
@@ -906,13 +939,17 @@ class SmallToolWorker:
         except Exception:
             pass
 
-    def _mark_seen(self, url: str, title: str, skipped: bool = False):
+    def _mark_seen(self, url: str, title: str, skipped: bool = False,
+                   reason: Optional[str] = None):
         with self._seen_lock:
-            self._seen[url] = {
+            entry = {
                 'title': title,
                 'at': datetime.now(timezone.utc).isoformat(),
                 'skipped': skipped,
             }
+            if reason:
+                entry['reason'] = reason
+            self._seen[url] = entry
             save_seen(self._seen)
 
 
@@ -937,6 +974,8 @@ class SmallToolApp(ctk.CTk):
 
         self._cfg = load_config()
         self._cfg['resolution'] = _normalize_resolution_pref(self._cfg)
+        self._cfg['missav_version_preference'] = (
+            _normalize_missav_version_pref(self._cfg))
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg['resolution'])
         self._log_queue: list[str] = []
@@ -1051,6 +1090,9 @@ class SmallToolApp(ctk.CTk):
             'baseline_date': self._date_var.get() if hasattr(self, '_date_var') else self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE),
             'selected_targets': self._get_selected_targets() if self._check_vars else self._cfg.get('selected_targets', []),
             'resolution': self._cfg.get('resolution', 'highest'),
+            'missav_version_preference': self._cfg.get(
+                'missav_version_preference',
+                DEFAULT_MISSAV_VERSION_PREFERENCE),
             'running': self._worker.is_running(),
             'check_now_state': check_state,
             'status_key': self._status_key,
@@ -1062,11 +1104,14 @@ class SmallToolApp(ctk.CTk):
         self._cfg['output_folder'] = snapshot['folder']
         self._cfg['baseline_date'] = snapshot['baseline_date']
         self._cfg['resolution'] = snapshot['resolution']
+        self._cfg['missav_version_preference'] = snapshot[
+            'missav_version_preference']
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(snapshot['resolution'])
         self._folder_var.set(snapshot['folder'])
         self._date_var.set(snapshot['baseline_date'])
         self._res_var.set(self._resolution_label())
+        self._missav_version_var.set(self._missav_version_label())
 
         for var in self._check_vars.values():
             var.set(False)
@@ -1126,6 +1171,30 @@ class SmallToolApp(ctk.CTk):
         if label in {'1080p', '720p', '480p', '360p'}:
             return label[:-1]
         return 'highest'
+
+    def _missav_version_label(self) -> str:
+        pref = self._cfg.get(
+            'missav_version_preference',
+            DEFAULT_MISSAV_VERSION_PREFERENCE)
+        return {
+            'chinese-subtitle': T('st_missav_pref_chinese'),
+            'uncensored-leak': T('st_missav_pref_leak'),
+            'standard': T('st_missav_pref_standard'),
+        }.get(pref, T('st_missav_pref_chinese'))
+
+    def _missav_version_values(self) -> list[str]:
+        return [
+            T('st_missav_pref_chinese'),
+            T('st_missav_pref_leak'),
+            T('st_missav_pref_standard'),
+        ]
+
+    def _missav_version_pref_from_label(self, label: str) -> str:
+        return {
+            T('st_missav_pref_chinese'): 'chinese-subtitle',
+            T('st_missav_pref_leak'): 'uncensored-leak',
+            T('st_missav_pref_standard'): 'standard',
+        }.get(str(label or ''), DEFAULT_MISSAV_VERSION_PREFERENCE)
 
     def _set_status_key(self, key: str, fg: str = TEXT_DIM):
         self._status_key = key
@@ -1311,12 +1380,15 @@ class SmallToolApp(ctk.CTk):
 
         res_group = ctk.CTkFrame(options, fg_color='transparent')
         res_group.pack(side='right', padx=(16, 0))
+        quality_row = ctk.CTkFrame(res_group, fg_color='transparent')
+        quality_row.pack(fill='x')
         ctk.CTkLabel(
-            res_group, text=T('st_resolution'), text_color=TEXT_SEC,
-            font=(font_family, 10, 'bold')).pack(side='left', padx=(0, 8))
+            quality_row, text=T('st_resolution'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+                side='left', padx=(0, 8))
         self._res_var = tk.StringVar(value=self._resolution_label())
         ctk.CTkOptionMenu(
-            res_group, variable=self._res_var, values=self._resolution_values(),
+            quality_row, variable=self._res_var, values=self._resolution_values(),
             command=self._on_res_change, width=178, height=34,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             button_color=BORDER_HOVER, button_hover_color=ACCENT,
@@ -1324,6 +1396,26 @@ class SmallToolApp(ctk.CTk):
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
             font=(font_family, 10), dropdown_font=(font_family, 10)).pack(side='left')
+
+        version_row = ctk.CTkFrame(res_group, fg_color='transparent')
+        version_row.pack(fill='x', pady=(6, 0))
+        ctk.CTkLabel(
+            version_row, text=T('st_missav_version'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+                side='left', padx=(0, 8))
+        self._missav_version_var = tk.StringVar(
+            value=self._missav_version_label())
+        ctk.CTkOptionMenu(
+            version_row, variable=self._missav_version_var,
+            values=self._missav_version_values(),
+            command=self._on_missav_version_change, width=178, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(
+                side='left')
         # Apply saved preference immediately (before auto-start)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg.get('resolution', 'highest'))
@@ -1865,6 +1957,11 @@ class SmallToolApp(ctk.CTk):
         pref = self._resolution_pref_from_label(val)
         set_resolution_pref(pref)
         self._cfg['resolution'] = pref
+        save_config(self._cfg)
+
+    def _on_missav_version_change(self, val):
+        pref = self._missav_version_pref_from_label(val)
+        self._cfg['missav_version_preference'] = pref
         save_config(self._cfg)
 
     def _start_worker(self):

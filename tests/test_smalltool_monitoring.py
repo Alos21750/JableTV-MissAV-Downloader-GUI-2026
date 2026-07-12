@@ -76,21 +76,21 @@ def test_exact_missav_monitoring_run_reports_scan_and_downloads(monkeypatch,
     assert any('First run' in line and '2026-04-11' in line for line in logs)
 
 
-def test_missav_same_code_prefers_uncensored_leak_regardless_of_order():
+def test_missav_same_code_uses_selected_version_regardless_of_order():
     standard = {
         '_site': 'MissAV',
-        'url': 'https://missav.ai/hone-297',
-        'title': 'HONE-297',
+        'url': 'https://missav.ai/mimk-284',
+        'title': 'MIMK-284',
     }
     subtitle = {
         '_site': 'MissAV',
-        'url': 'https://missav.ai/cn/hone-297-chinese-subtitle',
-        'title': 'HONE-297',
+        'url': 'https://missav.ai/cn/mimk-284-chinese-subtitle',
+        'title': 'MIMK-284',
     }
     leaked = {
         '_site': 'MissAV',
-        'url': 'https://missav.ai/hone-297-uncensored-leak',
-        'title': 'HONE-297',
+        'url': 'https://missav.ai/mimk-284-uncensored-leak',
+        'title': 'MIMK-284',
     }
     unrelated = {
         '_site': 'MissAV',
@@ -98,22 +98,31 @@ def test_missav_same_code_prefers_uncensored_leak_regardless_of_order():
         'title': 'FC2-PPV-1234567',
     }
 
-    for ordered in ([standard, subtitle, leaked, unrelated],
-                    [leaked, standard, subtitle, unrelated]):
-        kept, decisions = jable_smalltool._dedupe_missav_candidates(ordered)
-        kept_urls = [video['url'] for video in kept]
+    for preference, expected in (
+            ('chinese-subtitle', subtitle),
+            ('uncensored-leak', leaked),
+            ('standard', standard)):
+        for ordered in ([standard, subtitle, leaked, unrelated],
+                        [leaked, subtitle, standard, unrelated]):
+            kept, decisions = jable_smalltool._dedupe_missav_candidates(
+                ordered, preference)
+            kept_urls = [video['url'] for video in kept]
 
-        assert kept_urls.count(leaked['url']) == 1
-        assert standard['url'] not in kept_urls
-        assert subtitle['url'] not in kept_urls
-        assert unrelated['url'] in kept_urls
-        assert len(decisions) == 2
-        assert all(code == 'hone-297' for _dropped, _kept, code in decisions)
+            assert kept_urls.count(expected['url']) == 1
+            assert sum('mimk-284' in url for url in kept_urls) == 1
+            assert unrelated['url'] in kept_urls
+            assert len(decisions) == 2
+            assert all(code == 'mimk-284'
+                       for _dropped, _kept, code in decisions)
+
+    default_kept, _ = jable_smalltool._dedupe_missav_candidates(
+        [standard, leaked, subtitle])
+    assert default_kept == [subtitle]
 
     assert jable_smalltool._missav_video_code(unrelated) == 'fc2-ppv-1234567'
 
 
-def test_worker_downloads_only_uncensored_leak_for_duplicate_missav_code(
+def test_worker_defaults_to_chinese_subtitle_for_duplicate_missav_code(
         monkeypatch, tmp_path):
     monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
     monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
@@ -125,6 +134,7 @@ def test_worker_downloads_only_uncensored_leak_for_duplicate_missav_code(
     worker._fetch_page_for_site = lambda _site, url: ([] if 'page=2' in url else [
         {'url': 'https://missav.ai/hone-297', 'title': 'HONE-297'},
         {'url': 'https://missav.ai/hone-297-uncensored-leak', 'title': 'HONE-297'},
+        {'url': 'https://missav.ai/hone-297-chinese-subtitle', 'title': 'HONE-297'},
     ])
     worker._fetch_missav_video_date = lambda _url: (
         datetime(2026, 7, 11, tzinfo=timezone.utc), '2026-07-11')
@@ -144,9 +154,50 @@ def test_worker_downloads_only_uncensored_leak_for_duplicate_missav_code(
 
     assert worker._scan_and_download(cfg) is True
     assert downloaded == [(
-        'https://missav.ai/hone-297-uncensored-leak', str(tmp_path))]
+        'https://missav.ai/hone-297-chinese-subtitle', str(tmp_path))]
     assert worker._seen['https://missav.ai/hone-297']['skipped'] is True
+    assert worker._seen[
+        'https://missav.ai/hone-297-uncensored-leak']['skipped'] is True
     assert any('[DEDUP] hone-297' in line for line in logs)
+
+
+def test_changed_preference_reconsiders_version_skipped_by_dedup(
+        monkeypatch, tmp_path):
+    subtitle_url = 'https://missav.ai/mimk-284-chinese-subtitle'
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        'https://missav.ai/mimk-284': {
+            'title': 'MIMK-284', 'skipped': False,
+        },
+        subtitle_url: {
+            'title': 'MIMK-284', 'skipped': True,
+            'reason': 'duplicate-version',
+        },
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker._fetch_page_for_site = lambda _site, url: ([] if 'page=2' in url else [
+        {'url': subtitle_url, 'title': 'MIMK-284'},
+    ])
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 7, 12, tzinfo=timezone.utc), '2026-07-12')
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video['url'])
+    target = find_target('MissAV', None, '亂倫')
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'missav_version_preference': 'chinese-subtitle',
+        'first_run_done': False,
+        'selected_targets': [{
+            'site': 'MissAV', 'id': target['id'], 'category': target['name'],
+        }],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert downloaded == [subtitle_url]
 
 
 class _FakeWidget:
