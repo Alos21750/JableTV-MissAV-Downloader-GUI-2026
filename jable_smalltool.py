@@ -22,7 +22,6 @@ import re
 from datetime import date, datetime, timezone, timedelta
 from tkinter import filedialog, messagebox
 from typing import Optional
-from urllib.parse import unquote, urlsplit
 
 import customtkinter as ctk
 
@@ -76,6 +75,16 @@ from smalltool_categories import (
     selection_key,
     target_label,
 )
+from video_identity import (
+    DEFAULT_VERSION_PREFERENCE,
+    VALID_VERSION_PREFERENCES,
+    dedupe_video_candidates,
+    normalize_version_preference,
+    site_from_url,
+    url_slug,
+    video_code,
+    video_versions,
+)
 from ui_theme import (
     ACCENT, ACCENT_HOVER, ACCENT_DIM, SUCCESS, WARNING, ERROR_C, ERROR_DIM,
     BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
@@ -94,7 +103,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.26'
+APP_VERSION = '2.5.27'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -104,10 +113,6 @@ SCAN_RETRY_BACKOFF_SEC = 10 * 60
 MAX_SCAN_PAGES = 50
 DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
-MISSAV_VERSION_SUFFIXES = ('-uncensored-leak', '-chinese-subtitle')
-DEFAULT_MISSAV_VERSION_PREFERENCE = 'chinese-subtitle'
-_VALID_MISSAV_VERSION_PREFERENCES = {
-    'chinese-subtitle', 'uncensored-leak', 'standard'}
 
 # ── Site / category registry ────────────────────────────────────────
 # The grouped stable-ID registry lives in smalltool_categories.py.
@@ -134,73 +139,28 @@ def _months_before(base_date: date, months: int) -> date:
     return date(year, month, day)
 
 
-def _missav_slug(video: dict) -> str:
-    try:
-        path = urlsplit(video.get('url', '')).path
-        return unquote(path.rstrip('/').rsplit('/', 1)[-1]).casefold()
-    except (AttributeError, TypeError, ValueError):
-        return ''
-
-
 def _missav_video_code(video: dict) -> str:
-    """Canonical MissAV code, excluding verified presentation-version suffixes."""
-    slug = _missav_slug(video)
-    changed = True
-    while changed:
-        changed = False
-        for suffix in MISSAV_VERSION_SUFFIXES:
-            if slug.endswith(suffix):
-                slug = slug[:-len(suffix)]
-                changed = True
-                break
-    return slug
+    candidate = dict(video)
+    candidate['_site'] = 'MissAV'
+    return video_code(candidate)
 
 
 def _missav_video_version(video: dict) -> str:
-    slug = _missav_slug(video)
-    for suffix in MISSAV_VERSION_SUFFIXES:
-        if slug.endswith(suffix):
-            return suffix[1:]
+    candidate = dict(video)
+    candidate['_site'] = 'MissAV'
+    versions = video_versions(candidate)
+    if 'chinese-subtitle' in versions:
+        return 'chinese-subtitle'
+    if 'uncensored' in versions:
+        return 'uncensored'
     return 'standard'
 
 
 def _dedupe_missav_candidates(
         videos: list[dict],
-        preference: str = DEFAULT_MISSAV_VERSION_PREFERENCE):
-    """Keep one MissAV item per code, preferring the selected version."""
-    if preference not in _VALID_MISSAV_VERSION_PREFERENCES:
-        preference = DEFAULT_MISSAV_VERSION_PREFERENCE
-    kept = []
-    missav_indexes = {}
-    decisions = []
-
-    for video in videos:
-        if video.get('_site') != 'MissAV':
-            kept.append(video)
-            continue
-
-        code = _missav_video_code(video)
-        if not code:
-            kept.append(video)
-            continue
-
-        existing_index = missav_indexes.get(code)
-        if existing_index is None:
-            missav_indexes[code] = len(kept)
-            kept.append(video)
-            continue
-
-        existing = kept[existing_index]
-        if existing.get('url') == video.get('url'):
-            continue
-        if (_missav_video_version(video) == preference and
-                _missav_video_version(existing) != preference):
-            kept[existing_index] = video
-            decisions.append((existing, video, code))
-        else:
-            decisions.append((video, existing, code))
-
-    return kept, decisions
+        preference: str = DEFAULT_VERSION_PREFERENCE):
+    """Backward-compatible wrapper for older tests and integrations."""
+    return dedupe_video_candidates(videos, preference)
 
 
 def _fallback_state_dir() -> str:
@@ -253,13 +213,10 @@ SEEN_PATH = os.path.join(STATE_DIR, 'seen.json')
 _VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
 
 
-def _normalize_missav_version_pref(cfg: dict) -> str:
-    pref = cfg.get('missav_version_preference')
-    if isinstance(pref, str):
-        pref = pref.strip().lower()
-        if pref in _VALID_MISSAV_VERSION_PREFERENCES:
-            return pref
-    return DEFAULT_MISSAV_VERSION_PREFERENCE
+def _normalize_version_pref(cfg: dict) -> str:
+    value = cfg.get(
+        'version_preference', cfg.get('missav_version_preference'))
+    return normalize_version_preference(value)
 
 # ── Persistence ──────────────────────────────────────────────────────
 def _ensure_state_dir() -> None:
@@ -287,15 +244,15 @@ def load_config() -> dict:
             if isinstance(cfg, dict):
                 if not str(cfg.get('output_folder') or '').strip():
                     cfg['output_folder'] = _default_output_folder()
-                cfg['missav_version_preference'] = (
-                    _normalize_missav_version_pref(cfg))
+                cfg['version_preference'] = _normalize_version_pref(cfg)
+                cfg.pop('missav_version_preference', None)
                 return cfg
         except Exception:
             pass
     return {
         'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
-        'missav_version_preference': DEFAULT_MISSAV_VERSION_PREFERENCE,
+        'version_preference': DEFAULT_VERSION_PREFERENCE,
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
         'selected_targets': [],
@@ -323,7 +280,8 @@ def load_seen() -> dict:
     if os.path.exists(SEEN_PATH):
         try:
             with open(SEEN_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                seen = json.load(f)
+            return seen if isinstance(seen, dict) else {}
         except Exception:
             pass
     return {}
@@ -646,8 +604,9 @@ class SmallToolWorker:
     def _scan_and_download_locked(self, cfg: dict):
         dest = str(cfg.get('output_folder') or '').strip() or _default_output_folder()
         cfg['output_folder'] = dest
-        version_preference = _normalize_missav_version_pref(cfg)
-        cfg['missav_version_preference'] = version_preference
+        version_preference = _normalize_version_pref(cfg)
+        cfg['version_preference'] = version_preference
+        cfg.pop('missav_version_preference', None)
         os.makedirs(dest, exist_ok=True)
 
         targets = cfg.get('selected_targets', [])
@@ -719,6 +678,12 @@ class SmallToolWorker:
                     self._log(f'  Page {page}: no videos — end.')
                     break
 
+                target_id = str(cat.get('id') or target.get('id') or '')
+                for video in videos:
+                    video['_site'] = site_name
+                    video['_target_id'] = target_id
+                    video['_category'] = cat_name
+
                 self._log(f'  Page {page}: {len(videos)} video(s)')
                 page_all_seen = True
 
@@ -730,13 +695,35 @@ class SmallToolWorker:
                         continue
                     with self._seen_lock:
                         seen_entry = self._seen.get(vurl)
-                    if seen_entry:
+                    if isinstance(seen_entry, dict):
+                        known_versions = set(video_versions(v))
+                        stored_versions = seen_entry.get('versions', [])
+                        if isinstance(stored_versions, str):
+                            stored_versions = [stored_versions]
+                        if isinstance(stored_versions, (list, tuple, set)):
+                            known_versions.update(
+                                value for value in stored_versions
+                                if value in VALID_VERSION_PREFERENCES)
                         reconsider_preferred = (
-                            site_name == 'MissAV' and
                             seen_entry.get('reason') == 'duplicate-version' and
-                            _missav_video_version(v) == version_preference)
-                        if not reconsider_preferred:
+                            version_preference in known_versions)
+                        reconsider_older_baseline = False
+                        if seen_entry.get('reason') == 'before-baseline':
+                            release_date = seen_entry.get('release_date')
+                            if release_date:
+                                try:
+                                    release_dt = datetime.strptime(
+                                        release_date, '%Y-%m-%d').replace(
+                                            tzinfo=timezone.utc)
+                                    reconsider_older_baseline = (
+                                        release_dt >= baseline_dt)
+                                except (TypeError, ValueError):
+                                    reconsider_older_baseline = True
+                        if not (reconsider_preferred or
+                                reconsider_older_baseline):
                             continue
+                    elif seen_entry:
+                        continue
                     page_all_seen = False
 
                     # Date check for JableTV (has detail pages with relative dates)
@@ -755,9 +742,12 @@ class SmallToolWorker:
                                 break
                             continue
                         if video_dt < baseline_dt:
+                            v['_release_date'] = video_dt.date().isoformat()
                             slug = vurl.rstrip('/').split('/')[-1]
                             self._log(f'    [STOP] {slug} — {rel_text} (before {baseline_str})')
-                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            self._mark_seen(
+                                vurl, v.get('title', ''), skipped=True,
+                                reason='before-baseline', video=v)
                             reached_baseline = True
                             break
                         consecutive_skips = 0
@@ -778,9 +768,12 @@ class SmallToolWorker:
                                 break
                             continue
                         if video_dt is not None and video_dt < baseline_dt:
+                            v['_release_date'] = video_dt.date().isoformat()
                             slug = vurl.rstrip('/').split('/')[-1]
                             self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
-                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            self._mark_seen(
+                                vurl, v.get('title', ''), skipped=True,
+                                reason='before-baseline', video=v)
                             consecutive_skips += 1
                             if consecutive_skips >= 10:
                                 self._log(f'  10 consecutive skips — moving to next category.')
@@ -802,9 +795,12 @@ class SmallToolWorker:
                                 break
                             continue
                         if video_dt < baseline_dt:
+                            v['_release_date'] = video_dt.date().isoformat()
                             slug = vurl.rstrip('/').split('/')[-1]
                             self._log(f'    [SKIP] {slug} — {rel_text} (before {baseline_str})')
-                            self._mark_seen(vurl, v.get('title', ''), skipped=True)
+                            self._mark_seen(
+                                vurl, v.get('title', ''), skipped=True,
+                                reason='before-baseline', video=v)
                             consecutive_skips += 1
                             if consecutive_skips >= 10:
                                 self._log('  10 consecutive skips — moving to next category.')
@@ -814,7 +810,6 @@ class SmallToolWorker:
                         consecutive_skips = 0
                         self._log(f'    [KEEP] {vurl.rstrip("/").split("/")[-1]} — {rel_text}')
 
-                    v['_site'] = site_name
                     all_new_videos.append(v)
 
                 self._set_scan_state(
@@ -833,19 +828,40 @@ class SmallToolWorker:
             save_config(cfg)
             return True
 
-        all_new_videos, dedupe_decisions = _dedupe_missav_candidates(
-            all_new_videos, version_preference)
+        candidate_codes = {
+            code for code in (video_code(video) for video in all_new_videos)
+            if code
+        }
+        prior_downloads = self._successful_seen_candidates(candidate_codes)
+        kept_candidates, dedupe_decisions = dedupe_video_candidates(
+            prior_downloads + all_new_videos, version_preference)
         for dropped, kept, code in dedupe_decisions:
-            dropped_slug = _missav_slug(dropped)
-            kept_slug = _missav_slug(kept)
+            dropped_slug = video_code(dropped) or url_slug(dropped.get('url', ''))
+            kept_slug = video_code(kept) or url_slug(kept.get('url', ''))
             self._log(
                 f'  [DEDUP] {code}: keep {kept_slug}; skip {dropped_slug} '
                 f'(preference: {version_preference})')
             dropped_url = dropped.get('url', '')
-            if dropped_url and dropped_url != kept.get('url', ''):
+            if (not dropped.get('_already_seen') and dropped_url and
+                    dropped_url != kept.get('url', '')):
                 self._mark_seen(
                     dropped_url, dropped.get('title', ''), skipped=True,
-                    reason='duplicate-version')
+                    reason='duplicate-version', video=dropped)
+
+        all_new_videos = [
+            video for video in kept_candidates
+            if not video.get('_already_seen')
+        ]
+
+        if not all_new_videos:
+            self._log('No new videos remain after cross-site deduplication.')
+            if scan_blocked or not scan_had_success:
+                self._log('[WARN] Scan incomplete — will retry before marking first run done.')
+                return False
+            cfg['first_run_done'] = True
+            cfg['last_check_iso'] = datetime.now(timezone.utc).isoformat()
+            save_config(cfg)
+            return True
 
         self._set_scan_state()
         self._set_status('st_downloading', ACCENT)
@@ -886,7 +902,7 @@ class SmallToolWorker:
                 if isinstance(err, MirrorsBlockedError):
                     raise err
                 self._log(f'  [SKIP] invalid URL: {vurl}')
-                self._mark_seen(vurl, title, skipped=True)
+                self._mark_seen(vurl, title, skipped=True, video=video)
                 return
 
             # Wire up progress callback for the progress bar
@@ -913,7 +929,7 @@ class SmallToolWorker:
                 self._cleanup_temp(site_obj)
                 return
             self._log(f'  [OK] {title}')
-            self._mark_seen(vurl, title)
+            self._mark_seen(vurl, title, video=video)
         except MirrorsBlockedError as e:
             self._log(f'  [BLOCKED] {e}')
             if site_obj:
@@ -939,8 +955,34 @@ class SmallToolWorker:
         except Exception:
             pass
 
+    def _successful_seen_candidates(self, candidate_codes: set[str]) -> list[dict]:
+        """Return successful prior downloads that can collide with this scan."""
+        if not candidate_codes:
+            return []
+        with self._seen_lock:
+            seen_items = list(self._seen.items())
+
+        candidates = []
+        for url, entry in seen_items:
+            if not isinstance(entry, dict) or entry.get('skipped'):
+                continue
+            candidate = {
+                'url': url,
+                'title': entry.get('title', ''),
+                '_site': entry.get('site') or site_from_url(url),
+                '_code': entry.get('code', ''),
+                '_versions': entry.get('versions', []),
+                '_already_seen': True,
+            }
+            code = video_code(candidate)
+            if code and code in candidate_codes:
+                candidate['_code'] = code
+                candidates.append(candidate)
+        return candidates
+
     def _mark_seen(self, url: str, title: str, skipped: bool = False,
-                   reason: Optional[str] = None):
+                   reason: Optional[str] = None,
+                   video: Optional[dict] = None):
         with self._seen_lock:
             entry = {
                 'title': title,
@@ -949,6 +991,19 @@ class SmallToolWorker:
             }
             if reason:
                 entry['reason'] = reason
+            if video:
+                site = video.get('_site') or site_from_url(url)
+                code = video_code(video)
+                versions = sorted(video_versions(video))
+                if site:
+                    entry['site'] = site
+                if code:
+                    entry['code'] = code
+                if versions:
+                    entry['versions'] = versions
+                release_date = video.get('_release_date')
+                if release_date:
+                    entry['release_date'] = str(release_date)
             self._seen[url] = entry
             save_seen(self._seen)
 
@@ -974,8 +1029,8 @@ class SmallToolApp(ctk.CTk):
 
         self._cfg = load_config()
         self._cfg['resolution'] = _normalize_resolution_pref(self._cfg)
-        self._cfg['missav_version_preference'] = (
-            _normalize_missav_version_pref(self._cfg))
+        self._cfg['version_preference'] = _normalize_version_pref(self._cfg)
+        self._cfg.pop('missav_version_preference', None)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg['resolution'])
         self._log_queue: list[str] = []
@@ -1090,9 +1145,8 @@ class SmallToolApp(ctk.CTk):
             'baseline_date': self._date_var.get() if hasattr(self, '_date_var') else self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE),
             'selected_targets': self._get_selected_targets() if self._check_vars else self._cfg.get('selected_targets', []),
             'resolution': self._cfg.get('resolution', 'highest'),
-            'missav_version_preference': self._cfg.get(
-                'missav_version_preference',
-                DEFAULT_MISSAV_VERSION_PREFERENCE),
+            'version_preference': self._cfg.get(
+                'version_preference', DEFAULT_VERSION_PREFERENCE),
             'running': self._worker.is_running(),
             'check_now_state': check_state,
             'status_key': self._status_key,
@@ -1104,14 +1158,13 @@ class SmallToolApp(ctk.CTk):
         self._cfg['output_folder'] = snapshot['folder']
         self._cfg['baseline_date'] = snapshot['baseline_date']
         self._cfg['resolution'] = snapshot['resolution']
-        self._cfg['missav_version_preference'] = snapshot[
-            'missav_version_preference']
+        self._cfg['version_preference'] = snapshot['version_preference']
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(snapshot['resolution'])
         self._folder_var.set(snapshot['folder'])
         self._date_var.set(snapshot['baseline_date'])
         self._res_var.set(self._resolution_label())
-        self._missav_version_var.set(self._missav_version_label())
+        self._version_var.set(self._version_label())
 
         for var in self._check_vars.values():
             var.set(False)
@@ -1172,29 +1225,33 @@ class SmallToolApp(ctk.CTk):
             return label[:-1]
         return 'highest'
 
-    def _missav_version_label(self) -> str:
-        pref = self._cfg.get(
-            'missav_version_preference',
-            DEFAULT_MISSAV_VERSION_PREFERENCE)
+    def _version_label(self) -> str:
+        pref = self._cfg.get('version_preference', DEFAULT_VERSION_PREFERENCE)
         return {
-            'chinese-subtitle': T('st_missav_pref_chinese'),
-            'uncensored-leak': T('st_missav_pref_leak'),
-            'standard': T('st_missav_pref_standard'),
-        }.get(pref, T('st_missav_pref_chinese'))
+            'chinese-subtitle': T('st_pref_chinese'),
+            'uncensored': T('st_pref_uncensored'),
+            'standard': T('st_pref_standard'),
+            'english-subtitle': T('st_pref_english'),
+            'reducing-mosaic': T('st_pref_reducing_mosaic'),
+        }.get(pref, T('st_pref_chinese'))
 
-    def _missav_version_values(self) -> list[str]:
+    def _version_values(self) -> list[str]:
         return [
-            T('st_missav_pref_chinese'),
-            T('st_missav_pref_leak'),
-            T('st_missav_pref_standard'),
+            T('st_pref_chinese'),
+            T('st_pref_uncensored'),
+            T('st_pref_standard'),
+            T('st_pref_english'),
+            T('st_pref_reducing_mosaic'),
         ]
 
-    def _missav_version_pref_from_label(self, label: str) -> str:
+    def _version_pref_from_label(self, label: str) -> str:
         return {
-            T('st_missav_pref_chinese'): 'chinese-subtitle',
-            T('st_missav_pref_leak'): 'uncensored-leak',
-            T('st_missav_pref_standard'): 'standard',
-        }.get(str(label or ''), DEFAULT_MISSAV_VERSION_PREFERENCE)
+            T('st_pref_chinese'): 'chinese-subtitle',
+            T('st_pref_uncensored'): 'uncensored',
+            T('st_pref_standard'): 'standard',
+            T('st_pref_english'): 'english-subtitle',
+            T('st_pref_reducing_mosaic'): 'reducing-mosaic',
+        }.get(str(label or ''), DEFAULT_VERSION_PREFERENCE)
 
     def _set_status_key(self, key: str, fg: str = TEXT_DIM):
         self._status_key = key
@@ -1400,15 +1457,14 @@ class SmallToolApp(ctk.CTk):
         version_row = ctk.CTkFrame(res_group, fg_color='transparent')
         version_row.pack(fill='x', pady=(6, 0))
         ctk.CTkLabel(
-            version_row, text=T('st_missav_version'), text_color=TEXT_SEC,
+            version_row, text=T('st_version_preference'), text_color=TEXT_SEC,
             font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
                 side='left', padx=(0, 8))
-        self._missav_version_var = tk.StringVar(
-            value=self._missav_version_label())
+        self._version_var = tk.StringVar(value=self._version_label())
         ctk.CTkOptionMenu(
-            version_row, variable=self._missav_version_var,
-            values=self._missav_version_values(),
-            command=self._on_missav_version_change, width=178, height=34,
+            version_row, variable=self._version_var,
+            values=self._version_values(),
+            command=self._on_version_change, width=178, height=34,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             button_color=BORDER_HOVER, button_hover_color=ACCENT,
             text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
@@ -1959,9 +2015,10 @@ class SmallToolApp(ctk.CTk):
         self._cfg['resolution'] = pref
         save_config(self._cfg)
 
-    def _on_missav_version_change(self, val):
-        pref = self._missav_version_pref_from_label(val)
-        self._cfg['missav_version_preference'] = pref
+    def _on_version_change(self, val):
+        pref = self._version_pref_from_label(val)
+        self._cfg['version_preference'] = pref
+        self._cfg.pop('missav_version_preference', None)
         save_config(self._cfg)
 
     def _start_worker(self):

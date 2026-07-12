@@ -200,6 +200,245 @@ def test_changed_preference_reconsiders_version_skipped_by_dedup(
     assert downloaded == [subtitle_url]
 
 
+def _target(site, target_id):
+    found = find_target(site, target_id, None)
+    assert found is not None
+    return {'site': site, 'id': found['id'], 'category': found['name']}
+
+
+def test_worker_dedupes_same_code_across_categories_and_all_sites(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+
+    def fake_fetch(site, url):
+        if site == 'JableTV':
+            return [{
+                'url': 'https://jable.tv/videos/ipzz-905/',
+                'title': 'IPZZ-905',
+            }]
+        if site == 'MissAV':
+            suffix = ('-chinese-subtitle'
+                      if 'chinese-subtitle' in url else '')
+            return [{
+                'url': f'https://missav.ai/ipzz-905{suffix}',
+                'title': 'IPZZ-905',
+            }]
+        return [{
+            'url': 'https://supjav.com/440577.html',
+            'title': '[Reducing Mosaic] IPZZ-905',
+            'date': '2026/07/12',
+        }]
+
+    worker._fetch_page_for_site = fake_fetch
+    worker._fetch_video_date = lambda _url: (
+        datetime(2026, 7, 12, tzinfo=timezone.utc), 'today')
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 7, 12, tzinfo=timezone.utc), '2026-07-12')
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'reducing-mosaic',
+        'first_run_done': False,
+        'selected_targets': [
+            _target('JableTV', 'feed:latest'),
+            _target('JableTV', 'category:chinese-subtitle'),
+            _target('MissAV', 'feed:latest'),
+            _target('MissAV', 'feed:chinese-subtitle'),
+            _target('SupJav', 'category:reducing-mosaic'),
+        ],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert [video['url'] for video in downloaded] == [
+        'https://supjav.com/440577.html']
+    assert worker._seen['https://jable.tv/videos/ipzz-905/'][
+        'reason'] == 'duplicate-version'
+    assert worker._seen['https://jable.tv/videos/ipzz-905/'][
+        'versions'] == ['chinese-subtitle']
+    assert worker._seen['https://missav.ai/ipzz-905'][
+        'code'] == 'ipzz-905'
+
+
+def test_prior_preferred_download_blocks_cross_site_duplicate(
+        monkeypatch, tmp_path):
+    existing_url = 'https://jable.tv/videos/ipzz-905/'
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        existing_url: {
+            'title': 'IPZZ-905', 'skipped': False, 'site': 'JableTV',
+            'code': 'ipzz-905', 'versions': ['chinese-subtitle'],
+        },
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    candidate_url = 'https://missav.ai/ipzz-905-chinese-subtitle'
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': candidate_url, 'title': 'IPZZ-905',
+    }]
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 7, 12, tzinfo=timezone.utc), '2026-07-12')
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'chinese-subtitle',
+        'first_run_done': False,
+        'selected_targets': [_target('MissAV', 'feed:chinese-subtitle')],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert downloaded == []
+    assert worker._seen[existing_url]['skipped'] is False
+    assert worker._seen[candidate_url]['reason'] == 'duplicate-version'
+
+
+def test_new_preferred_cross_site_version_upgrades_prior_download(
+        monkeypatch, tmp_path):
+    existing_url = 'https://jable.tv/videos/ipzz-905/'
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        existing_url: {
+            'title': 'IPZZ-905', 'skipped': False, 'site': 'JableTV',
+            'code': 'ipzz-905', 'versions': ['standard'],
+        },
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    preferred_url = 'https://supjav.com/440577.html'
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': preferred_url, 'title': '[Reducing Mosaic] IPZZ-905',
+        'date': '2026/07/12',
+    }]
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'reducing-mosaic',
+        'first_run_done': False,
+        'selected_targets': [
+            _target('SupJav', 'category:reducing-mosaic')],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert [video['url'] for video in downloaded] == [preferred_url]
+    assert worker._seen[existing_url]['skipped'] is False
+
+
+def test_changed_preference_reconsiders_supjav_duplicate(monkeypatch, tmp_path):
+    preferred_url = 'https://supjav.com/440577.html'
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        preferred_url: {
+            'title': '[Reducing Mosaic] IPZZ-905', 'skipped': True,
+            'reason': 'duplicate-version', 'site': 'SupJav',
+            'code': 'ipzz-905', 'versions': ['reducing-mosaic'],
+        },
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': preferred_url, 'title': '[Reducing Mosaic] IPZZ-905',
+        'date': '2026/07/12',
+    }]
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'reducing-mosaic',
+        'first_run_done': False,
+        'selected_targets': [
+            _target('SupJav', 'category:reducing-mosaic')],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert [video['url'] for video in downloaded] == [preferred_url]
+
+
+def test_earlier_baseline_reconsiders_previously_too_old_video(
+        monkeypatch, tmp_path):
+    video_url = 'https://supjav.com/440577.html'
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        video_url: {
+            'title': 'IPZZ-905', 'skipped': True,
+            'reason': 'before-baseline', 'release_date': '2026-01-01',
+            'site': 'SupJav', 'code': 'ipzz-905',
+            'versions': ['standard'],
+        },
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': video_url, 'title': 'IPZZ-905', 'date': '2026/01/01',
+    }]
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2025-12-01',
+        'version_preference': 'standard',
+        'first_run_done': False,
+        'selected_targets': [_target('SupJav', 'feed:latest')],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert [video['url'] for video in downloaded] == [video_url]
+
+
+def test_same_baseline_keeps_previously_too_old_video_skipped(
+        monkeypatch, tmp_path):
+    video_url = 'https://supjav.com/440577.html'
+    original_entry = {
+        'title': 'IPZZ-905', 'skipped': True,
+        'reason': 'before-baseline', 'release_date': '2026-01-01',
+        'site': 'SupJav', 'code': 'ipzz-905', 'versions': ['standard'],
+    }
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {
+        video_url: dict(original_entry),
+    })
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    worker._fetch_page_for_site = lambda _site, _url: [{
+        'url': video_url, 'title': 'IPZZ-905', 'date': '2026/01/01',
+    }]
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'standard',
+        'first_run_done': False,
+        'selected_targets': [_target('SupJav', 'feed:latest')],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert downloaded == []
+    assert worker._seen[video_url] == original_entry
+
+
 class _FakeWidget:
     def __init__(self):
         self.visible = True

@@ -40,7 +40,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.26'
+APP_VERSION = '2.5.27'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:

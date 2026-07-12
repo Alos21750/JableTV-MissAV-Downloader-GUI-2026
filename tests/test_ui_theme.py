@@ -1,5 +1,6 @@
 import re
 import types
+from pathlib import Path
 
 import gui_modern
 import jable_smalltool
@@ -52,8 +53,8 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
         assert _contrast(ui_theme.TEXT_PRI[index], ui_theme.BG_CARD[index]) >= 7
 
 
-def test_v256_version_and_new_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.26'
+def test_current_version_and_global_smalltool_copy_are_complete():
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.27'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -61,26 +62,37 @@ def test_v256_version_and_new_smalltool_copy_are_complete():
         'st_candidates_found',
         'st_calendar', 'st_date_quick', 'st_date_month_1',
         'st_date_month_2', 'st_folder_error',
-        'st_missav_version', 'st_missav_pref_chinese',
-        'st_missav_pref_leak', 'st_missav_pref_standard',
+        'st_version_preference', 'st_pref_chinese',
+        'st_pref_uncensored', 'st_pref_standard',
+        'st_pref_english', 'st_pref_reducing_mosaic',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v2.5.26', language
+        assert strings['version_label'] == 'v2.5.27', language
         assert required <= strings.keys(), language
 
 
-def test_missav_version_selector_saves_internal_preference(monkeypatch):
+def test_windows_version_resources_match_app_version():
+    root = Path(__file__).resolve().parents[1]
+    generator = (root / 'build_tmp' / 'gen_version.py').read_text(
+        encoding='utf-8')
+    assert 'VERSION = (2, 5, 27, 0)' in generator
+    for name in ('JableTV_Modern.version', 'Jable_smalltool.version'):
+        resource = (root / 'build_tmp' / name).read_text(encoding='utf-8')
+        assert 'filevers=(2, 5, 27, 0)' in resource
+        assert "StringStruct('FileVersion', '2.5.27.0')" in resource
+
+
+def test_global_version_selector_saves_internal_preference(monkeypatch):
     app = jable_smalltool.SmallToolApp.__new__(jable_smalltool.SmallToolApp)
     app._cfg = {}
     saved = []
     monkeypatch.setattr(jable_smalltool, 'save_config',
                         lambda cfg: saved.append(dict(cfg)))
 
-    app._on_missav_version_change(
-        jable_smalltool.T('st_missav_pref_leak'))
+    app._on_version_change(jable_smalltool.T('st_pref_uncensored'))
 
-    assert app._cfg['missav_version_preference'] == 'uncensored-leak'
-    assert saved[-1]['missav_version_preference'] == 'uncensored-leak'
+    assert app._cfg['version_preference'] == 'uncensored'
+    assert saved[-1]['version_preference'] == 'uncensored'
 
 
 def test_smalltool_selected_count_reflects_target_vars_only():
