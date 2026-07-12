@@ -221,6 +221,7 @@ docker compose run --rm jabletv <URL>     # 或直接指定網址
 
 ## 更新紀錄
 
+- **v2.5.23** — ✦ **Modern／SmallTool 全面 UI 升級**：兩個 Windows 程式統一石墨黑、暖白與朱紅品牌視覺；Modern 瀏覽頁改為 2／3／4 欄響應式卡片、雙層工具列與分層下載列，設定頁同步提升字級與間距；SmallTool 全面改用 CustomTkinter，新增明暗主題、重整設定／分類／監控／進度／活動紀錄層級，並改善高 DPI 與窄視窗排版。
 - **v2.5.22** — 🔧 **SupJav 穩定性與畫質修復**（#31）：改用可下載的 FST HLS 來源依偏好選擇 480p／720p／1080p，Streamtape 作自動備援；Range 連線中斷會從已收 byte 續傳，多線失敗時降級單線。下載失敗列新增單筆 ↻ 重試。SmallTool 新增三站完整分組分類、搜尋、群組全選與 SupJav 日期判斷。
 - **v2.5.21** — 🚀 **改善 SupJav 下載速度**（#30）：Streamtape 支援 HTTP Range 時改用 4 路分段並行下載，不支援時自動保留原本單線模式；速度限制、進度與取消功能維持不變，實際速度仍依 CDN 與網路而異。GUI 與 Docker / NAS 版皆適用。
 - **v2.5.20** — 🔧 **修復 SupJav 無法下載**（#29）：SupJav 的 TV 來源改用受 Google 登入保護的片段、任何非瀏覽器都抓不到（顯示「未完成」）。新版改為**優先使用 Streamtape 來源直接下載 MP4**，保留 TV（HLS）作為備援，找不到可用來源時顯示清楚訊息。GUI 與 Docker / NAS 版皆適用。

@@ -17,11 +17,12 @@ import sys
 import threading
 import time
 import tkinter as tk
-import tkinter.ttk as ttk
 import re
 from datetime import datetime, timezone, timedelta
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox
 from typing import Optional
+
+import customtkinter as ctk
 
 # Enable DPI awareness (Windows)
 try:
@@ -73,6 +74,13 @@ from smalltool_categories import (
     selection_key,
     target_label,
 )
+from ui_theme import (
+    ACCENT, ACCENT_HOVER, ACCENT_DIM, SUCCESS, WARNING, ERROR_C, ERROR_DIM,
+    BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
+    BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, BORDER, BORDER_HOVER,
+    BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS, color_for_mode,
+    category_columns_for_width,
+)
 
 # Optional direct-fetch fallback for diagnostics / when cloudscraper struggles
 try:
@@ -84,7 +92,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.22'
+APP_VERSION = '2.5.23'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -152,24 +160,6 @@ STATE_DIR = _select_state_dir()
 CONFIG_PATH = os.path.join(STATE_DIR, 'config.json')
 SEEN_PATH = os.path.join(STATE_DIR, 'seen.json')
 _VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
-
-# Palette (align with main app)
-BG_DARK = '#0d0d18'
-BG_CARD = '#161630'
-BG_INPUT = '#1c1c38'
-BG_HEADER = '#101020'
-ACCENT = '#e94560'
-ACCENT_HOVER = '#c73350'
-SUCCESS = '#4ade80'
-WARNING = '#fbbf24'
-ERROR_C = '#f87171'
-TEXT_PRI = '#f0f0f8'
-TEXT_SEC = '#a0a0c0'
-TEXT_DIM = '#666688'
-BORDER = '#2a2a48'
-CHECK_ON = '#e94560'
-CHECK_OFF = '#2a2a48'
-
 
 # ── Persistence ──────────────────────────────────────────────────────
 def _ensure_state_dir() -> None:
@@ -812,20 +802,23 @@ class SmallToolWorker:
 
 
 # ── GUI ──────────────────────────────────────────────────────────────
-class SmallToolApp(tk.Tk):
+class SmallToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self._lang_code_by_name = {name: code for code, name in LANGUAGES}
         self._lang_name_by_code = {code: name for code, name in LANGUAGES}
+        self._theme_mode = config.get_theme()
+        ctk.set_appearance_mode(self._theme_mode)
+        ctk.set_default_color_theme('blue')
 
         stored = config.get_ui_lang()
         set_lang(stored or 'en')
         self._needs_lang_prompt = (stored is None)
 
         self._update_window_title()
-        self.geometry('860x680')
-        self.minsize(700, 550)
-        self.configure(bg=BG_DARK)
+        self.geometry('980x800')
+        self.minsize(820, 680)
+        self.configure(fg_color=BG_DARK)
 
         self._cfg = load_config()
         self._cfg['resolution'] = _normalize_resolution_pref(self._cfg)
@@ -842,8 +835,12 @@ class SmallToolApp(tk.Tk):
                                        status_fn=self._set_status_threadsafe)
         self._check_vars: dict[str, tk.BooleanVar] = {}  # stable "site|target-id" keys
         self._target_widgets: list[tuple[object, str]] = []
+        self._category_groups: list[list[object]] = []
+        self._category_columns = category_columns_for_width(980)
+        self._resize_after_id = None
 
         self._build_ui()
+        self.bind('<Configure>', self._on_root_resize, add='+')
         self._load_selections_from_config()
         self._sync_select_all_vars()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -863,16 +860,21 @@ class SmallToolApp(tk.Tk):
     def _ask_language_first_run(self):
         popup = None
         try:
+            mode = ctk.get_appearance_mode().lower()
+            bg = color_for_mode(BG_DARK, mode)
+            card = color_for_mode(BG_CARD, mode)
+            fg = color_for_mode(TEXT_PRI, mode)
+            accent = color_for_mode(ACCENT, mode)
             popup = tk.Toplevel(self)
             popup.title(T('st_lang_picker_title'))
-            popup.configure(bg=BG_DARK)
+            popup.configure(bg=bg)
             popup.resizable(False, False)
             popup.transient(self)
 
             picker_font = ui_font()
             tk.Label(
                 popup, text=T('st_lang_picker_title'),
-                bg=BG_DARK, fg=TEXT_PRI,
+                bg=bg, fg=fg,
                 font=(picker_font, 14, 'bold')).pack(padx=28, pady=(24, 12))
 
             def _choose(code='en'):
@@ -887,8 +889,8 @@ class SmallToolApp(tk.Tk):
             for code, name in LANGUAGES:
                 tk.Button(
                     popup, text=name, width=24,
-                    bg=BG_CARD, fg=TEXT_PRI,
-                    activebackground=ACCENT, activeforeground='#ffffff',
+                    bg=card, fg=fg,
+                    activebackground=accent, activeforeground='#ffffff',
                     relief='flat', bd=0, padx=12, pady=8,
                     font=(picker_font, 11),
                     command=lambda c=code: _choose(c)).pack(padx=28, pady=4)
@@ -977,6 +979,7 @@ class SmallToolApp(tk.Tk):
 
             self._check_vars = {}
             self._target_widgets = []
+            self._category_groups = []
             self._build_ui()
             self._restore_ui_state(snapshot)
             self._update_window_title()
@@ -1009,288 +1012,380 @@ class SmallToolApp(tk.Tk):
         text = T(key) if key.startswith('st_') else key
         if hasattr(self, '_status_lbl'):
             try:
-                self._status_lbl.configure(text=text, fg=fg)
+                self._status_lbl.configure(text=text, text_color=fg)
             except tk.TclError:
                 pass
+
+    def _theme_glyph(self):
+        return {'system': '◐', 'light': '☀', 'dark': '☾'}.get(self._theme_mode, '◐')
+
+    def _cycle_theme(self):
+        modes = ('system', 'light', 'dark')
+        try:
+            index = modes.index(self._theme_mode)
+        except ValueError:
+            index = 0
+        self._theme_mode = modes[(index + 1) % len(modes)]
+        ctk.set_appearance_mode(self._theme_mode)
+        config.set_theme(self._theme_mode)
+        self._theme_btn.configure(text=self._theme_glyph())
+
+    def _on_root_resize(self, event):
+        if event.widget is not self or self._is_closing:
+            return
+        try:
+            logical_width = event.width / max(self._get_window_scaling(), 1.0)
+        except Exception:
+            logical_width = event.width
+        columns = category_columns_for_width(logical_width)
+        if columns == self._category_columns:
+            return
+        self._category_columns = columns
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except tk.TclError:
+                pass
+        try:
+            self._resize_after_id = self.after(160, self._reflow_category_grid)
+        except tk.TclError:
+            self._resize_after_id = None
+
+    def _reflow_category_grid(self):
+        self._resize_after_id = None
+        for widgets in self._category_groups:
+            for index, widget in enumerate(widgets):
+                try:
+                    widget.grid_configure(
+                        row=index // self._category_columns,
+                        column=index % self._category_columns)
+                except tk.TclError:
+                    pass
 
     def _build_ui(self):
         font_family = ui_font()
         self._update_window_title()
 
-        # ── TTK styles (larger checkboxes + progress bar) ───────────
-        self._style = ttk.Style()
-        self._style.theme_use('clam')
-        self._style.configure('Cat.TCheckbutton',
-                              background=BG_CARD, foreground=TEXT_PRI,
-                              font=(font_family, 10),
-                              indicatorsize=18)
-        self._style.map('Cat.TCheckbutton',
-                        background=[('active', BG_CARD)],
-                        indicatorcolor=[('selected', ACCENT),
-                                        ('!selected', BG_INPUT)])
-        self._style.configure('All.TCheckbutton',
-                              background=BG_CARD, foreground=WARNING,
-                              font=(font_family, 10, 'bold'),
-                              indicatorsize=18)
-        self._style.map('All.TCheckbutton',
-                        background=[('active', BG_CARD)],
-                        indicatorcolor=[('selected', ACCENT),
-                                        ('!selected', BG_INPUT)])
-        self._style.configure('DL.Horizontal.TProgressbar',
-                              troughcolor=BG_INPUT,
-                              background=ACCENT,
-                              thickness=16)
-
         # ── Header ──────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=BG_HEADER, height=48)
+        hdr = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=72)
         hdr.pack(fill='x')
         hdr.pack_propagate(False)
-        tk.Label(hdr, text=T('st_header'),
-                 bg=BG_HEADER, fg=ACCENT,
-                 font=(font_family, 14, 'bold')).pack(side='left', padx=14)
-        tk.Label(hdr, text=T('st_subtitle'),
-                 bg=BG_HEADER, fg=TEXT_SEC,
-                 font=(font_family, 11)).pack(side='left', padx=(0, 8))
 
-        right_info = tk.Frame(hdr, bg=BG_HEADER)
-        right_info.pack(side='right', padx=14)
-        tk.Label(right_info, text=T('st_version_by', version=APP_VERSION),
-                 bg=BG_HEADER, fg=TEXT_DIM,
-                 font=('Consolas', 10)).pack(side='right', padx=(10, 0))
-        self._lang_var = tk.StringVar(value=self._lang_name_by_code.get(get_lang(), 'English'))
-        lang_menu = tk.OptionMenu(
-            right_info, self._lang_var, *[name for _, name in LANGUAGES],
-            command=self._on_lang_change)
-        lang_menu.configure(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
-                            activeforeground=TEXT_PRI, relief='flat', bd=2,
-                            font=(font_family, 9), highlightthickness=0)
-        lang_menu['menu'].configure(bg=BG_INPUT, fg=TEXT_PRI,
-                                    activebackground=ACCENT, activeforeground='#ffffff',
-                                    font=(font_family, 9))
-        lang_menu.pack(side='right')
-        tk.Label(right_info, text=T('st_lang_label'),
-                 bg=BG_HEADER, fg=TEXT_DIM,
-                 font=(font_family, 9)).pack(side='right', padx=(0, 6))
+        brand = ctk.CTkFrame(hdr, fg_color='transparent')
+        brand.pack(side='left', fill='y', padx=20)
+        ctk.CTkLabel(
+            brand, text=T('st_header'), text_color=TEXT_PRI,
+            font=(font_family, 17, 'bold')).pack(anchor='w', pady=(10, 0))
+        ctk.CTkLabel(
+            brand, text=T('st_subtitle').upper(), text_color=ACCENT,
+            font=('Consolas', 9, 'bold')).pack(anchor='w', pady=(0, 10))
+
+        right_info = ctk.CTkFrame(hdr, fg_color='transparent')
+        right_info.pack(side='right', fill='y', padx=20)
+
+        version_box = ctk.CTkFrame(
+            right_info, fg_color=BG_BADGE, corner_radius=6,
+            border_width=1, border_color=BORDER)
+        version_box.pack(side='right', padx=(10, 0), pady=18)
+        ctk.CTkLabel(
+            version_box, text=f'v{APP_VERSION}', text_color=TEXT_SEC,
+            font=('Consolas', 10, 'bold')).pack(padx=10, pady=4)
+
+        self._theme_btn = ctk.CTkButton(
+            right_info, text=self._theme_glyph(), width=36, height=36,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_CARD,
+            border_width=1, border_color=BORDER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(font_family, 14), command=self._cycle_theme)
+        self._theme_btn.pack(side='right', padx=(8, 0), pady=18)
+
+        self._lang_var = ctk.StringVar(
+            value=self._lang_name_by_code.get(get_lang(), 'English'))
+        self._lang_menu = ctk.CTkOptionMenu(
+            right_info, values=[name for _, name in LANGUAGES],
+            variable=self._lang_var, command=self._on_lang_change,
+            width=126, height=36, corner_radius=CONTROL_RADIUS,
+            fg_color=BG_INPUT, button_color=BORDER_HOVER,
+            button_hover_color=ACCENT, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 11), dropdown_font=(font_family, 11))
+        self._lang_menu.pack(side='right', pady=18)
+
+        ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
+
+        main = ctk.CTkFrame(self, fg_color='transparent')
+        main.pack(fill='both', expand=True, padx=18, pady=(14, 12))
 
         # ── Config row: folder + date ───────────────────────────────
-        cfg_frame = tk.Frame(self, bg=BG_DARK)
-        cfg_frame.pack(fill='x', padx=14, pady=(10, 4))
+        cfg_card = ctk.CTkFrame(
+            main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        cfg_card.pack(fill='x')
+        cfg_card.grid_columnconfigure(1, weight=1)
 
-        tk.Label(cfg_frame, text=T('st_save_location'), bg=BG_DARK, fg=TEXT_SEC,
-                 font=(font_family, 10)).pack(side='left')
+        ctk.CTkLabel(
+            cfg_card, text=T('st_save_location'), text_color=TEXT_SEC,
+            font=(font_family, 11, 'bold'), width=98, anchor='w').grid(
+                row=0, column=0, padx=(16, 8), pady=(14, 8), sticky='w')
         self._folder_var = tk.StringVar(value=self._cfg.get('output_folder', ''))
-        entry = tk.Entry(cfg_frame, textvariable=self._folder_var,
-                         bg=BG_INPUT, fg=TEXT_PRI,
-                         insertbackground=TEXT_PRI,
-                         relief='flat', bd=4,
-                         font=(font_family, 10))
-        entry.pack(side='left', fill='x', expand=True, padx=8)
-        tk.Button(cfg_frame, text=T('st_browse'),
-                  bg=BG_CARD, fg=TEXT_PRI,
-                  activebackground='#2a2a4a',
-                  relief='flat', bd=0, padx=10, pady=4,
-                  font=(font_family, 10),
-                  command=self._pick_folder).pack(side='left')
+        ctk.CTkEntry(
+            cfg_card, textvariable=self._folder_var, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=(font_family, 11)).grid(
+                row=0, column=1, padx=8, pady=(14, 8), sticky='ew')
+        ctk.CTkButton(
+            cfg_card, text=T('st_browse'), width=82, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(font_family, 11), command=self._pick_folder).grid(
+                row=0, column=2, padx=(8, 16), pady=(14, 8))
 
-        # Date row
-        date_frame = tk.Frame(self, bg=BG_DARK)
-        date_frame.pack(fill='x', padx=14, pady=(0, 6))
-        tk.Label(date_frame, text=T('st_baseline_date'), bg=BG_DARK, fg=TEXT_SEC,
-                 font=(font_family, 10)).pack(side='left')
+        options = ctk.CTkFrame(cfg_card, fg_color='transparent')
+        options.grid(row=1, column=0, columnspan=3, padx=16, pady=(2, 14), sticky='ew')
+
+        date_group = ctk.CTkFrame(options, fg_color='transparent')
+        date_group.pack(side='left', fill='x', expand=True)
+        ctk.CTkLabel(
+            date_group, text=T('st_baseline_date'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold')).pack(side='left')
         self._date_var = tk.StringVar(value=self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE))
-        date_entry = tk.Entry(date_frame, textvariable=self._date_var,
-                              bg=BG_INPUT, fg=TEXT_PRI,
-                              insertbackground=TEXT_PRI,
-                              relief='flat', bd=4, width=14,
-                              font=(font_family, 10))
-        date_entry.pack(side='left', padx=8)
-        tk.Label(date_frame, text=T('st_date_hint'),
-                 bg=BG_DARK, fg=TEXT_DIM,
-                 font=(font_family, 9)).pack(side='left')
+        ctk.CTkEntry(
+            date_group, textvariable=self._date_var, width=128, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=('Consolas', 10)).pack(
+                side='left', padx=(8, 10))
+        ctk.CTkLabel(
+            date_group, text=T('st_date_hint'), text_color=TEXT_DIM,
+            font=(font_family, 9), wraplength=340, justify='left').pack(side='left')
 
-        # Resolution row
-        res_frame = tk.Frame(self, bg=BG_DARK)
-        res_frame.pack(fill='x', padx=14, pady=(0, 6))
-        tk.Label(res_frame, text=T('st_resolution'), bg=BG_DARK, fg=TEXT_SEC,
-                 font=(font_family, 10)).pack(side='left')
+        res_group = ctk.CTkFrame(options, fg_color='transparent')
+        res_group.pack(side='right', padx=(16, 0))
+        ctk.CTkLabel(
+            res_group, text=T('st_resolution'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold')).pack(side='left', padx=(0, 8))
         self._res_var = tk.StringVar(value=self._resolution_label())
-        res_menu = tk.OptionMenu(res_frame, self._res_var, *self._resolution_values(),
-                                 command=self._on_res_change)
-        res_menu.configure(bg=BG_INPUT, fg=TEXT_PRI, activebackground=BG_CARD,
-                           activeforeground=TEXT_PRI, relief='flat', bd=4,
-                           font=(font_family, 10), highlightthickness=0)
-        res_menu['menu'].configure(bg=BG_INPUT, fg=TEXT_PRI,
-                                   activebackground=ACCENT, activeforeground='#ffffff',
-                                   font=(font_family, 10))
-        res_menu.pack(side='left', padx=8)
+        ctk.CTkOptionMenu(
+            res_group, variable=self._res_var, values=self._resolution_values(),
+            command=self._on_res_change, width=178, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 10), dropdown_font=(font_family, 10)).pack(side='left')
         # Apply saved preference immediately (before auto-start)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg.get('resolution', 'highest'))
 
         # ── Site / Category selection ───────────────────────────────
-        sel_label = tk.Label(self, text=T('st_select_hint'),
-                             bg=BG_DARK, fg=TEXT_SEC,
-                             font=(font_family, 10, 'bold'), anchor='w')
-        sel_label.pack(fill='x', padx=14, pady=(4, 2))
+        selection = ctk.CTkFrame(
+            main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        selection.pack(fill='both', expand=True, pady=(12, 10))
 
-        filter_row = tk.Frame(self, bg=BG_DARK)
-        filter_row.pack(fill='x', padx=14, pady=(0, 4))
-        tk.Label(filter_row, text=T('st_filter_categories'), bg=BG_DARK,
-                 fg=TEXT_DIM, font=(font_family, 9)).pack(side='left')
+        selection_header = ctk.CTkFrame(selection, fg_color='transparent')
+        selection_header.pack(fill='x', padx=16, pady=(14, 8))
+        ctk.CTkLabel(
+            selection_header, text=T('st_select_hint'), text_color=TEXT_PRI,
+            font=(font_family, 13, 'bold')).pack(side='left')
+        self._selected_count_lbl = ctk.CTkLabel(
+            selection_header, text=f'0 {T("selected")}', text_color=TEXT_DIM,
+            font=(font_family, 10, 'bold'))
+        self._selected_count_lbl.pack(side='left', padx=(10, 0))
+
         self._category_filter_var = tk.StringVar()
-        filter_entry = tk.Entry(
-            filter_row, textvariable=self._category_filter_var,
-            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
-            relief='flat', bd=3, font=(font_family, 9))
-        filter_entry.pack(side='left', fill='x', expand=True, padx=(8, 0))
+        filter_entry = ctk.CTkEntry(
+            selection_header, textvariable=self._category_filter_var,
+            width=250, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=(font_family, 10))
+        filter_entry.pack(side='right')
+        ctk.CTkLabel(
+            selection_header, text=T('st_filter_categories'), text_color=TEXT_DIM,
+            font=(font_family, 9)).pack(side='right', padx=(0, 8))
         self._category_filter_var.trace_add('write', self._filter_targets)
 
-        self._style.configure('SmallTool.TNotebook', background=BG_DARK, borderwidth=0)
-        self._style.configure('SmallTool.TNotebook.Tab', background=BG_INPUT,
-                              foreground=TEXT_SEC, padding=(14, 5))
-        self._style.map('SmallTool.TNotebook.Tab',
-                        background=[('selected', BG_CARD)],
-                        foreground=[('selected', ACCENT)])
-        notebook = ttk.Notebook(self, style='SmallTool.TNotebook', height=205)
-        notebook.pack(fill='x', padx=14, pady=(0, 6))
+        tabview = ctk.CTkTabview(
+            selection, fg_color='transparent', corner_radius=0,
+            segmented_button_fg_color=BG_INPUT,
+            segmented_button_selected_color=ACCENT,
+            segmented_button_selected_hover_color=ACCENT_HOVER,
+            segmented_button_unselected_color=BG_INPUT,
+            segmented_button_unselected_hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, border_width=0)
+        tabview.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
         for site_name, site_info in SITES.items():
-            tab = tk.Frame(notebook, bg=BG_CARD)
-            notebook.add(tab, text=f'{site_name}  ({len(list(iter_targets(site_name)))})')
-
-            canvas = tk.Canvas(tab, bg=BG_CARD, highlightthickness=0, height=190)
-            scrollbar = ttk.Scrollbar(tab, orient='vertical', command=canvas.yview)
-            canvas.configure(yscrollcommand=scrollbar.set)
-            scrollbar.pack(side='right', fill='y')
-            canvas.pack(side='left', fill='both', expand=True)
-
-            inner = tk.Frame(canvas, bg=BG_CARD)
-            window_id = canvas.create_window((0, 0), window=inner, anchor='nw')
-            inner.bind('<Configure>',
-                       lambda _e, c=canvas: c.configure(scrollregion=c.bbox('all')))
-            canvas.bind('<Configure>',
-                        lambda e, c=canvas, w=window_id: c.itemconfigure(w, width=e.width))
+            tab_name = f'{site_name}  {len(list(iter_targets(site_name)))}'
+            tabview.add(tab_name)
+            tab = tabview.tab(tab_name)
+            tab.configure(fg_color='transparent')
+            inner = ctk.CTkScrollableFrame(
+                tab, fg_color='transparent', corner_radius=0,
+                scrollbar_button_color=BORDER,
+                scrollbar_button_hover_color=BORDER_HOVER)
+            inner.pack(fill='both', expand=True)
 
             for group in site_info['groups']:
-                group_frame = tk.LabelFrame(
-                    inner,
-                    text=f'  {group_label(group)} ({len(group["targets"])})  ',
-                    bg=BG_CARD, fg=ACCENT,
-                    font=(font_family, 9, 'bold'),
-                    bd=1, relief='groove', padx=6, pady=4)
-                group_frame.pack(fill='x', padx=6, pady=4)
+                group_frame = ctk.CTkFrame(
+                    inner, fg_color=BG_SECTION, corner_radius=8,
+                    border_width=1, border_color=BORDER_CARD)
+                group_frame.pack(fill='x', padx=4, pady=5)
+
+                group_header = ctk.CTkFrame(group_frame, fg_color='transparent')
+                group_header.pack(fill='x', padx=12, pady=(9, 5))
+                ctk.CTkLabel(
+                    group_header,
+                    text=f'{group_label(group)}  {len(group["targets"])}',
+                    text_color=TEXT_PRI, font=(font_family, 11, 'bold')).pack(
+                        side='left')
 
                 all_key = f'{site_name}|__group__|{group["id"]}'
                 all_var = tk.BooleanVar(value=False)
                 self._check_vars[all_key] = all_var
-                ttk.Checkbutton(
-                    group_frame, text=T('st_select_all'),
-                    style='All.TCheckbutton', variable=all_var,
+                ctk.CTkCheckBox(
+                    group_header, text=T('st_select_all'), variable=all_var,
+                    width=110, height=24, checkbox_width=18, checkbox_height=18,
+                    corner_radius=4, border_width=1,
+                    fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                    border_color=BORDER_HOVER, checkmark_color=WHITE,
+                    text_color=ACCENT, font=(font_family, 10, 'bold'),
                     command=lambda sn=site_name, gid=group['id']:
                         self._toggle_select_group(sn, gid),
-                ).grid(row=0, column=0, sticky='w', padx=6, pady=2)
+                ).pack(side='right')
 
-                cat_grid = tk.Frame(group_frame, bg=BG_CARD)
-                cat_grid.grid(row=1, column=0, sticky='ew')
+                cat_grid = ctk.CTkFrame(group_frame, fg_color='transparent')
+                cat_grid.pack(fill='x', padx=10, pady=(0, 10))
                 for col in range(3):
                     cat_grid.grid_columnconfigure(col, weight=1)
+                group_widgets = []
                 for i, target in enumerate(group['targets']):
                     label = target_label(target)
                     key = selection_key(site_name, target['id'])
                     var = tk.BooleanVar(value=False)
                     self._check_vars[key] = var
-                    cb = ttk.Checkbutton(
-                        cat_grid, text=label,
-                        style='Cat.TCheckbutton', variable=var,
+                    cb = ctk.CTkCheckBox(
+                        cat_grid, text=label, variable=var,
+                        height=26, checkbox_width=17, checkbox_height=17,
+                        corner_radius=4, border_width=1,
+                        fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                        border_color=BORDER_HOVER, checkmark_color=WHITE,
+                        text_color=TEXT_SEC, font=(font_family, 10),
                         command=lambda sn=site_name, gid=group['id']:
                             self._sync_group_select(sn, gid))
-                    row, col = divmod(i, 3)
-                    cb.grid(row=row, column=col, sticky='w', padx=6, pady=2)
+                    row, col = divmod(i, self._category_columns)
+                    cb.grid(row=row, column=col, sticky='w', padx=6, pady=3)
                     self._target_widgets.append((cb, label.casefold()))
+                    group_widgets.append(cb)
+                self._category_groups.append(group_widgets)
 
         # ── Control row ─────────────────────────────────────────────
-        ctrl = tk.Frame(self, bg=BG_DARK)
-        ctrl.pack(fill='x', padx=14, pady=(0, 6))
+        ctrl = ctk.CTkFrame(main, fg_color='transparent')
+        ctrl.pack(fill='x', pady=(0, 10))
 
-        self._start_btn = tk.Button(
-            ctrl, text=T('st_start'),
-            bg=ACCENT, fg='#ffffff',
-            activebackground=ACCENT_HOVER,
-            relief='flat', bd=0, padx=14, pady=6,
-            font=(font_family, 10, 'bold'),
+        self._start_btn = ctk.CTkButton(
+            ctrl, text=T('st_start'), width=142, height=40,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(font_family, 11, 'bold'),
             command=self._start_worker)
         self._start_btn.pack(side='left')
 
-        self._stop_btn = tk.Button(
-            ctrl, text=T('st_stop'),
-            bg='#3a1a20', fg=ERROR_C,
-            activebackground='#2a1215',
-            relief='flat', bd=0, padx=14, pady=6,
-            font=(font_family, 10),
+        self._stop_btn = ctk.CTkButton(
+            ctrl, text=T('st_stop'), width=92, height=40,
+            corner_radius=CONTROL_RADIUS, fg_color=ERROR_DIM,
+            hover_color=BG_CARD_HOVER, text_color=ERROR_C,
+            border_width=1, border_color=BORDER,
+            font=(font_family, 11),
             command=self._stop_worker,
             state='disabled')
         self._stop_btn.pack(side='left', padx=(8, 0))
 
-        self._check_now_btn = tk.Button(
-            ctrl, text=T('st_check_now'),
-            bg=BG_CARD, fg=TEXT_PRI,
-            activebackground='#2a2a4a',
-            relief='flat', bd=0, padx=14, pady=6,
-            font=(font_family, 10),
+        self._check_now_btn = ctk.CTkButton(
+            ctrl, text=T('st_check_now'), width=112, height=40,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(font_family, 11),
             command=self._check_now)
         self._check_now_btn.pack(side='left', padx=(8, 0))
 
-        self._status_lbl = tk.Label(
-            ctrl, text=T(self._status_key), bg=BG_DARK, fg=self._status_fg,
-            font=(font_family, 10))
-        self._status_lbl.pack(side='right')
+        status_box = ctk.CTkFrame(
+            ctrl, fg_color=BG_BADGE, corner_radius=CONTROL_RADIUS,
+            border_width=1, border_color=BORDER)
+        status_box.pack(side='right')
+        self._status_lbl = ctk.CTkLabel(
+            status_box, text=T(self._status_key), text_color=self._status_fg,
+            font=(font_family, 10, 'bold'))
+        self._status_lbl.pack(padx=12, pady=6)
 
         # ── Download progress bar ───────────────────────────────────
-        prog_outer = tk.Frame(self, bg=BG_CARD, padx=10, pady=6)
-        prog_outer.pack(fill='x', padx=14, pady=(0, 4))
+        prog_outer = ctk.CTkFrame(
+            main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        prog_outer.pack(fill='x', pady=(0, 10))
 
-        self._prog_title = tk.Label(prog_outer, text='',
-                                     bg=BG_CARD, fg=TEXT_PRI,
-                                     font=(font_family, 9),
-                                     anchor='w')
-        self._prog_title.pack(fill='x')
+        self._prog_title = ctk.CTkLabel(
+            prog_outer, text=T('st_progress_idle'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold'), anchor='w')
+        self._prog_title.pack(fill='x', padx=14, pady=(10, 4))
 
-        bar_row = tk.Frame(prog_outer, bg=BG_CARD)
-        bar_row.pack(fill='x', pady=(3, 0))
+        bar_row = ctk.CTkFrame(prog_outer, fg_color='transparent')
+        bar_row.pack(fill='x', padx=14, pady=(0, 10))
 
-        self._prog_bar = ttk.Progressbar(
-            bar_row, style='DL.Horizontal.TProgressbar',
-            maximum=100, value=0, mode='determinate')
-        self._prog_bar.pack(side='left', fill='x', expand=True)
+        self._prog_bar = ctk.CTkProgressBar(
+            bar_row, height=8, corner_radius=4,
+            fg_color=BG_INPUT, progress_color=ACCENT)
+        self._prog_bar.set(0)
+        self._prog_bar.pack(side='left', fill='x', expand=True, pady=7)
 
-        self._prog_pct = tk.Label(bar_row, text='',
-                                   bg=BG_CARD, fg=ACCENT,
-                                   font=('Consolas', 11, 'bold'),
-                                   width=5, anchor='e')
+        self._prog_pct = ctk.CTkLabel(
+            bar_row, text='', text_color=ACCENT,
+            font=('Consolas', 10, 'bold'), width=48, anchor='e')
         self._prog_pct.pack(side='left', padx=(8, 0))
 
-        self._prog_info = tk.Label(bar_row, text='',
-                                    bg=BG_CARD, fg=TEXT_SEC,
-                                    font=('Consolas', 9),
-                                    anchor='e')
-        self._prog_info.pack(side='right')
+        self._prog_info = ctk.CTkLabel(
+            bar_row, text='', text_color=TEXT_SEC,
+            font=('Consolas', 9), anchor='e')
+        self._prog_info.pack(side='right', padx=(8, 0))
 
         # ── Log box ─────────────────────────────────────────────────
-        self._log_box = scrolledtext.ScrolledText(
-            self, bg=BG_CARD, fg=TEXT_PRI,
-            insertbackground=TEXT_PRI,
-            relief='flat', bd=0,
-            font=('Consolas', 10),
-            wrap='word', state='disabled')
-        self._log_box.pack(fill='both', expand=True, padx=14, pady=(0, 10))
+        activity = ctk.CTkFrame(
+            main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        activity.pack(fill='both', expand=True)
+        activity_header = ctk.CTkFrame(activity, fg_color='transparent')
+        activity_header.pack(fill='x', padx=14, pady=(9, 5))
+        ctk.CTkLabel(
+            activity_header, text=T('st_activity'), text_color=TEXT_PRI,
+            font=(font_family, 11, 'bold')).pack(side='left')
+        ctk.CTkLabel(
+            activity_header, text=T('st_footer_short'), text_color=TEXT_DIM,
+            font=(font_family, 9)).pack(side='right')
 
-        # Footer
-        tk.Label(
-            self,
-            text=T('st_footer'),
-            bg=BG_DARK, fg=TEXT_DIM, font=(font_family, 9)).pack(pady=(0, 8))
+        self._log_box = ctk.CTkTextbox(
+            activity, fg_color=BG_INPUT, text_color=TEXT_SEC,
+            border_width=0, corner_radius=6,
+            font=('Consolas', 10), wrap='word', state='disabled')
+        self._log_box.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
     # ── Selection helpers ────────────────────────────────────────────
+    def _update_selected_count(self):
+        if not hasattr(self, '_selected_count_lbl'):
+            return
+        count = sum(
+            1 for key, var in self._check_vars.items()
+            if '|__group__|' not in key and var.get())
+        self._selected_count_lbl.configure(
+            text=f'{count} {T("selected")}',
+            text_color=ACCENT if count else TEXT_DIM)
+
     def _filter_targets(self, *_args):
         query = self._category_filter_var.get().strip().casefold()
         for widget, label in self._target_widgets:
@@ -1308,6 +1403,7 @@ class SmallToolApp(tk.Tk):
         group = next(g for g in SITES[site_name]['groups'] if g['id'] == group_id)
         for target in group['targets']:
             self._check_vars[selection_key(site_name, target['id'])].set(val)
+        self._update_selected_count()
 
     def _sync_group_select(self, site_name: str, group_id: str):
         group = next(g for g in SITES[site_name]['groups'] if g['id'] == group_id)
@@ -1317,6 +1413,7 @@ class SmallToolApp(tk.Tk):
         self._check_vars[all_key].set(
             bool(target_keys) and
             all(self._check_vars[key].get() for key in target_keys))
+        self._update_selected_count()
 
     def _sync_select_all_vars(self):
         for site_name, site_info in SITES.items():
@@ -1324,6 +1421,7 @@ class SmallToolApp(tk.Tk):
                 all_key = f'{site_name}|__group__|{group["id"]}'
                 if all_key in self._check_vars:
                     self._sync_group_select(site_name, group['id'])
+        self._update_selected_count()
 
     def _get_selected_targets(self) -> list[dict]:
         targets = []
@@ -1555,23 +1653,23 @@ class SmallToolApp(tk.Tk):
                 done, total, speed, title = prog
                 if total > 0:
                     pct = int(done * 100 / total)
-                    self._prog_bar['value'] = pct
+                    self._prog_bar.set(max(0.0, min(1.0, pct / 100)))
                     self._prog_pct.configure(text=f'{pct}%')
                     speed_str = (f'{speed / 1024:.0f} KB/s' if speed < 1024 * 1024
                                  else f'{speed / 1024 / 1024:.1f} MB/s')
                     self._prog_info.configure(text=f'{done}/{total} | {speed_str}')
                 else:
                     # Preparing phase (0, 0, ...)
-                    self._prog_bar['value'] = 0
+                    self._prog_bar.set(0)
                     self._prog_pct.configure(text='')
                     self._prog_info.configure(text=T('st_preparing'))
                 short = title[:50] + '...' if len(title) > 50 else title
                 self._prog_title.configure(text=f'↓ {short}')
             else:
-                self._prog_bar['value'] = 0
+                self._prog_bar.set(0)
                 self._prog_pct.configure(text='')
                 self._prog_info.configure(text='')
-                self._prog_title.configure(text='')
+                self._prog_title.configure(text=T('st_progress_idle'), text_color=TEXT_SEC)
         except (tk.TclError, AttributeError):
             if not self._is_closing:
                 try:

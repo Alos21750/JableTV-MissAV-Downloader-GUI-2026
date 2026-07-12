@@ -31,8 +31,16 @@ from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
+from ui_theme import (
+    ACCENT, ACCENT_HOVER, ACCENT_DIM,
+    SUCCESS, SUCCESS_DIM, WARNING, WARNING_DIM, ERROR_C, ERROR_DIM,
+    BG_DARK, BG_CARD, BG_CARD_HOVER, BG_INPUT, BG_HEADER, BG_SECTION,
+    BG_SIDEBAR, BG_BADGE, TEXT_PRI, TEXT_SEC, TEXT_DIM, TEXT_LINK,
+    BORDER, BORDER_HOVER, BORDER_CARD, WHITE, CARD_RADIUS, CONTROL_RADIUS,
+    browse_columns_for_width,
+)
 
-APP_VERSION = '2.5.22'
+APP_VERSION = '2.5.23'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -40,32 +48,6 @@ try:
 except Exception:
     def _crumb(msg):
         pass
-
-# ── Design tokens ────────────────────────────────────────────────────
-ACCENT        = ('#DC3D43', '#E5484D')
-ACCENT_HOVER  = ('#C8323A', '#D43A40')
-ACCENT_DIM    = ('#FCEBEC', '#2A1719')
-SUCCESS       = ('#2E8B45', '#46A758')
-SUCCESS_DIM   = ('#E6F2E9', '#14271B')
-WARNING       = ('#B97A0A', '#E0A030')
-WARNING_DIM   = ('#FBF3E2', '#2E2410')
-ERROR_C       = ('#C8323A', '#E5707A')
-ERROR_DIM     = ('#FCEBEC', '#2A1719')
-BG_DARK       = ('#FAF9F7', '#131215')
-BG_CARD       = ('#FFFFFF', '#1C1B1F')
-BG_CARD_HOVER = ('#F6F5F2', '#232227')
-BG_INPUT      = ('#FFFFFF', '#1A191D')
-BG_HEADER     = ('#FFFFFF', '#100F12')
-BG_SECTION    = ('#F2F0EC', '#17161B')
-BG_SIDEBAR    = ('#F2F0EC', '#0E0D10')
-BG_BADGE      = ('#F0EEEA', '#1E1E22')
-TEXT_PRI      = ('#1C1A17', '#F2F0EE')
-TEXT_SEC      = ('#6B6760', '#A8A5AE')
-TEXT_DIM      = ('#9B968D', '#6B6872')
-TEXT_LINK     = ('#C8323A', '#E5848A')
-BORDER        = ('#E6E3DE', '#2A2930')
-BORDER_HOVER  = ('#D5D1CA', '#3A3942')
-BORDER_CARD   = ('#E6E3DE', '#242329')
 
 DEFAULT_CONCURRENT = 2
 MAX_CONCURRENT = 10
@@ -451,7 +433,7 @@ _thumb_session: Optional[requests.Session] = None
 _thumb_lock = threading.Lock()
 _thumb_cache: dict = {}   # url -> PIL.Image (raw, not CTkImage; Tk root needed)
 _thumb_cache_lock = threading.Lock()   # guards _thumb_cache mutation across the 4 worker threads
-_THUMB_SIZE = (260, 146)  # 16:9 at 260px wide
+_THUMB_SIZE = (300, 169)  # readable 16:9 cards at the default three-column layout
 
 
 def _get_thumb_session() -> requests.Session:
@@ -512,8 +494,8 @@ class ModernApp(ctk.CTk):
         self._needs_lang_prompt = (stored is None)
 
         self.title('JableTV · MissAV · SupJav Downloader — by ALOS')
-        self.geometry('1280x800')
-        self.minsize(1000, 650)
+        self.geometry('1280x820')
+        self.minsize(980, 680)
         self.configure(fg_color=BG_DARK)
 
         self._dest = dest
@@ -531,6 +513,8 @@ class ModernApp(ctk.CTk):
         self._selected_urls: set = set()
         self._sidebar_expanded: dict[str, bool] = {}
         self._grid_gen: int = 0  # bumps on each page refresh so stale thumbs are dropped
+        self._grid_columns = browse_columns_for_width(1280)
+        self._resize_after_id = None
         self._page_req: int = 0
         self._build_gen: int = 0
         self._active_tab_idx: int = 0
@@ -576,6 +560,7 @@ class ModernApp(ctk.CTk):
         set_resolution_pref(config.get_resolution_pref())
 
         self._build_ui()
+        self.bind('<Configure>', self._on_root_resize, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self._start_update_check(manual=False)
 
@@ -938,6 +923,34 @@ class ModernApp(ctk.CTk):
         config.set_theme(self._theme_mode)
         self._theme_btn.configure(text=self._theme_glyph())
 
+    def _on_root_resize(self, event):
+        if event.widget is not self or self._is_closing:
+            return
+        try:
+            logical_width = event.width / max(self._get_window_scaling(), 1.0)
+        except Exception:
+            logical_width = event.width
+        columns = browse_columns_for_width(logical_width)
+        if columns == self._grid_columns:
+            return
+        self._grid_columns = columns
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except tk.TclError:
+                pass
+        try:
+            self._resize_after_id = self.after(180, self._apply_responsive_grid)
+        except tk.TclError:
+            self._resize_after_id = None
+
+    def _apply_responsive_grid(self):
+        self._resize_after_id = None
+        if (self._is_closing or not self._videos or
+                getattr(self, '_grid_scroll', None) is None):
+            return
+        self._refresh_grid()
+
     def _current_tab_index(self):
         return self._active_tab_idx
 
@@ -956,7 +969,7 @@ class ModernApp(ctk.CTk):
             try:
                 w['lbl'].configure(
                     text_color=(TEXT_PRI if active else TEXT_SEC),
-                    font=(ui_font(), 15, 'bold') if active else (ui_font(), 15))
+                    font=(ui_font(), 13, 'bold') if active else (ui_font(), 13))
                 w['underline'].configure(fg_color=(ACCENT if active else 'transparent'))
             except tk.TclError:
                 pass
@@ -1077,7 +1090,7 @@ class ModernApp(ctk.CTk):
             self._cf_ua_var.set(snapshot['cf_ua'])
             self._refresh_cf_status()
             self._set_tab_index(snapshot['tab_idx'])
-            self._sel_lbl.configure(text='')
+            self._update_selection_count()
             self._rebuild_sidebar()
             self._load_categories()
         finally:
@@ -1086,28 +1099,30 @@ class ModernApp(ctk.CTk):
 
     def _build_ui(self):
         # ── Header bar ──────────────────────────────────────────────
-        header = ctk.CTkFrame(self, height=56, fg_color=BG_HEADER, corner_radius=0)
+        header = ctk.CTkFrame(self, height=64, fg_color=BG_HEADER, corner_radius=0)
         header.pack(fill='x')
         header.pack_propagate(False)
 
-        # Brand
+        # Brand — stacked to keep the product name readable at compact widths.
         brand = ctk.CTkFrame(header, fg_color='transparent')
-        brand.pack(side='left', padx=20, fill='y')
+        brand.pack(side='left', padx=24, fill='y')
         ctk.CTkLabel(brand, text='JableTV · MissAV · SupJav',
-                     font=(ui_font(), 18, 'bold'),
-                     text_color=TEXT_PRI).pack(side='left', pady=0)
-        ctk.CTkLabel(brand, text='Downloader',
-                     font=(ui_font(), 18),
-                     text_color=ACCENT).pack(side='left', padx=(8, 0))
+                     font=(ui_font(), 17, 'bold'),
+                     text_color=TEXT_PRI).pack(anchor='w', pady=(9, 0))
+        ctk.CTkLabel(brand, text='DOWNLOADER  /  ALOS',
+                     font=('Consolas', 9, 'bold'),
+                     text_color=ACCENT).pack(anchor='w', pady=(0, 9))
 
         # Right info
         right_info = ctk.CTkFrame(header, fg_color='transparent')
-        right_info.pack(side='right', padx=20, fill='y')
-        version_box = ctk.CTkFrame(right_info, fg_color='transparent')
-        version_box.pack(side='right')
-        ctk.CTkLabel(version_box, text=f'v{APP_VERSION}  |  by ALOS',
-                     font=('Consolas', 10),
-                     text_color=TEXT_DIM).pack(side='left')
+        right_info.pack(side='right', padx=24, fill='y')
+        version_box = ctk.CTkFrame(
+            right_info, fg_color=BG_BADGE, corner_radius=6,
+            border_width=1, border_color=BORDER)
+        version_box.pack(side='right', padx=(10, 0), pady=14)
+        ctk.CTkLabel(version_box, text=f'v{APP_VERSION}',
+                     font=('Consolas', 10, 'bold'),
+                     text_color=TEXT_SEC).pack(side='left', padx=10, pady=4)
         self._update_badge = ctk.CTkLabel(
             version_box, text=T('update_new_badge'),
             font=(ui_font(), 10, 'bold'), text_color=ACCENT)
@@ -1117,25 +1132,23 @@ class ModernApp(ctk.CTk):
             pass
         self._update_badge.bind('<Button-1>', self._show_update_settings)
         self._theme_btn = ctk.CTkButton(
-            right_info, text=self._theme_glyph(), width=34, height=34,
-            corner_radius=8, fg_color=BG_CARD, border_width=1,
+            right_info, text=self._theme_glyph(), width=36, height=36,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_CARD, border_width=1,
             border_color=BORDER, hover_color=BG_CARD_HOVER,
             text_color=TEXT_SEC, font=(ui_font(), 14),
             command=self._cycle_theme)
-        self._theme_btn.pack(side='right', padx=(0, 10), pady=11)
+        self._theme_btn.pack(side='right', padx=(8, 0), pady=14)
         self._lang_var = ctk.StringVar(value=self._lang_name_by_code.get(get_lang(), 'English'))
         self._lang_menu = ctk.CTkOptionMenu(
             right_info, values=[name for _, name in LANGUAGES],
             variable=self._lang_var, command=self._on_lang_change,
-            width=120, height=34, corner_radius=8,
+            width=126, height=36, corner_radius=CONTROL_RADIUS,
             fg_color=BG_INPUT, button_color=BORDER_HOVER,
             button_hover_color=ACCENT, text_color=TEXT_PRI,
             dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
-            font=(ui_font(), 10), dropdown_font=(ui_font(), 10))
-        self._lang_menu.pack(side='right', padx=(0, 8), pady=11)
-        ctk.CTkLabel(right_info, text=T('lang_label'), text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(side='right', padx=(0, 6))
+            font=(ui_font(), 11), dropdown_font=(ui_font(), 11))
+        self._lang_menu.pack(side='right', pady=14)
 
         # Header separator
         ctk.CTkFrame(self, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
@@ -1144,7 +1157,7 @@ class ModernApp(ctk.CTk):
         self._tab_keys = ['browse', 'download', 'settings']
         tab_labels = {'browse': T('tab_browse'), 'download': T('tab_download'), 'settings': T('tab_settings')}
 
-        tabbar = ctk.CTkFrame(self, height=50, fg_color=BG_HEADER, corner_radius=0)
+        tabbar = ctk.CTkFrame(self, height=48, fg_color=BG_HEADER, corner_radius=0)
         tabbar.pack(fill='x')
         tabbar.pack_propagate(False)
         tabbar_inner = ctk.CTkFrame(tabbar, fg_color='transparent')
@@ -1158,7 +1171,7 @@ class ModernApp(ctk.CTk):
             underline = ctk.CTkFrame(holder, height=3, fg_color='transparent', corner_radius=2)
             underline.pack(side='bottom', fill='x', padx=4, pady=(0, 0))
             lbl = ctk.CTkLabel(holder, text=tab_labels[key],
-                               font=(ui_font(), 15), text_color=TEXT_SEC, cursor='hand2')
+                               font=(ui_font(), 13), text_color=TEXT_SEC, cursor='hand2')
             lbl.pack(side='top', fill='both', expand=True, padx=14)
             lbl.bind('<Button-1>', lambda e, k=key: self._select_tab(k))
             self._tab_buttons[key] = {'lbl': lbl, 'underline': underline}
@@ -1194,84 +1207,72 @@ class ModernApp(ctk.CTk):
     def _build_browse_tab(self):
         tab = self._tab_frames['browse']
 
-        # ── Top toolbar ─────────────────────────────────────────────
-        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=58)
+        # ── Two-level workspace toolbar ─────────────────────────────
+        top = ctk.CTkFrame(tab, fg_color=BG_SECTION, corner_radius=0, height=108)
         top.pack(fill='x')
         top.pack_propagate(False)
 
-        # Left group: Site + Category selectors
-        left = ctk.CTkFrame(top, fg_color='transparent')
-        left.pack(side='left', fill='y', padx=(16, 0))
-
+        filters = ctk.CTkFrame(top, fg_color='transparent')
+        filters.pack(fill='x', padx=20, pady=(10, 6))
         self._site_var = ctk.StringVar(value=self._site_key)
-        ctk.CTkLabel(left, text=T('site_label'), text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(side='left', padx=(0, 6))
-        self._site_menu = ctk.CTkOptionMenu(
-            left, values=list(SITES.keys()), variable=self._site_var,
-            command=self._on_site_change, width=110,
-            fg_color=BG_INPUT, button_color=BORDER_HOVER,
-            button_hover_color=ACCENT, text_color=TEXT_PRI,
-            dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
-            dropdown_text_color=TEXT_PRI, corner_radius=8)
-        self._site_menu.pack(side='left', padx=(0, 8))
+        self._site_menu = ctk.CTkSegmentedButton(
+            filters, values=list(SITES.keys()), variable=self._site_var,
+            command=self._on_site_change, height=36, corner_radius=CONTROL_RADIUS,
+            fg_color=BG_INPUT, selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
+            unselected_color=BG_INPUT, unselected_hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 11, 'bold'))
+        self._site_menu.pack(side='left')
 
-        # Vertical divider
-        ctk.CTkFrame(left, width=1, fg_color=BORDER).pack(
-            side='left', fill='y', pady=14, padx=6)
-
-        ctk.CTkLabel(left, text=T('category_label'), text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(side='left', padx=(6, 6))
         self._cat_var = ctk.StringVar(value=T('loading_browse'))
         self._cat_menu = ctk.CTkOptionMenu(
-            left, values=[T('loading_browse')], variable=self._cat_var,
-            command=self._on_cat_change, width=170,
+            filters, values=[T('loading_browse')], variable=self._cat_var,
+            command=self._on_cat_change, width=190, height=36,
             fg_color=BG_INPUT, button_color=BORDER_HOVER,
             button_hover_color=ACCENT, text_color=TEXT_PRI,
             dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
-            dropdown_text_color=TEXT_PRI, corner_radius=8)
-        self._cat_menu.pack(side='left')
-
-        # Center: Search
-        center = ctk.CTkFrame(top, fg_color='transparent')
-        center.pack(side='left', fill='y', padx=16)
+            dropdown_text_color=TEXT_PRI, corner_radius=CONTROL_RADIUS,
+            font=(ui_font(), 11), dropdown_font=(ui_font(), 11))
+        self._cat_menu.pack(side='left', padx=(10, 0))
 
         self._search_var = ctk.StringVar()
-        search_entry = ctk.CTkEntry(center, textvariable=self._search_var,
+        search_entry = ctk.CTkEntry(filters, textvariable=self._search_var,
                                      placeholder_text=T('search_placeholder'),
-                                     width=220, height=32,
+                                     height=36,
                                      fg_color=BG_INPUT, border_color=BORDER,
-                                     border_width=1, corner_radius=8,
-                                     text_color=TEXT_PRI)
-        search_entry.pack(side='left', padx=(0, 6))
+                                     border_width=1, corner_radius=CONTROL_RADIUS,
+                                     text_color=TEXT_PRI, font=(ui_font(), 11))
+        search_entry.pack(side='left', fill='x', expand=True, padx=(10, 8))
         search_entry.bind('<Return>', lambda e: self._on_search())
-        ctk.CTkButton(center, text=T('search_btn'), command=self._on_search,
-                      width=64, height=32, corner_radius=8,
+        ctk.CTkButton(filters, text=T('search_btn'), command=self._on_search,
+                      width=76, height=36, corner_radius=CONTROL_RADIUS,
                       fg_color=ACCENT,
                       hover_color=ACCENT_HOVER,
-                      text_color=('#FFFFFF', '#FFFFFF')).pack(side='left')
+                      text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(side='left')
 
-        # Right: Selection controls
-        right = ctk.CTkFrame(top, fg_color='transparent')
-        right.pack(side='right', fill='y', padx=(0, 16))
+        actions = ctk.CTkFrame(top, fg_color='transparent')
+        actions.pack(fill='x', padx=20, pady=(0, 10))
 
-        self._sel_lbl = ctk.CTkLabel(right, text='', text_color=ACCENT,
-                                      font=(ui_font(), 11, 'bold'))
-        self._sel_lbl.pack(side='right', padx=8)
-        ctk.CTkButton(right, text=T('select_all_btn'), command=self._select_all_on_page,
-                      width=80, height=32, corner_radius=8,
+        self._sel_lbl = ctk.CTkLabel(
+            actions, text=f'0 {T("selected")}', text_color=TEXT_SEC,
+            font=(ui_font(), 11, 'bold'))
+        self._sel_lbl.pack(side='left')
+        ctk.CTkButton(actions, text=T('download_selected'), command=self._download_selected,
+                      width=128, height=34, corner_radius=CONTROL_RADIUS,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=WHITE, font=(ui_font(), 11, 'bold')).pack(
+                          side='right', padx=(8, 0))
+        ctk.CTkButton(actions, text=T('add_to_queue'), command=self._add_selected_to_queue,
+                      width=104, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER,
-                      text_color=TEXT_PRI).pack(side='right', padx=4)
-        ctk.CTkButton(right, text=T('download_selected'), command=self._download_selected,
-                      width=100, height=32, corner_radius=8,
-                      fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER,
-                      text_color=('#FFFFFF', '#FFFFFF')).pack(side='right', padx=4)
-        ctk.CTkButton(right, text=T('add_to_queue'), command=self._add_selected_to_queue,
-                      width=80, height=32, corner_radius=8,
+                      text_color=TEXT_PRI, font=(ui_font(), 11)).pack(side='right')
+        ctk.CTkButton(actions, text=T('select_all_btn'), command=self._select_all_on_page,
+                      width=92, height=34, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER,
-                      text_color=TEXT_PRI).pack(side='right', padx=4)
+                      text_color=TEXT_PRI, font=(ui_font(), 11)).pack(
+                          side='right', padx=(0, 8))
 
         # ── Content area: sidebar + grid ────────────────────────────
         content = ctk.CTkFrame(tab, fg_color=BG_DARK, corner_radius=0)
@@ -1279,7 +1280,7 @@ class ModernApp(ctk.CTk):
 
         # Sidebar
         self._sidebar = ctk.CTkScrollableFrame(
-            content, width=145, fg_color=BG_SIDEBAR,
+            content, width=176, fg_color=BG_SIDEBAR,
             corner_radius=0, scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=BORDER_HOVER)
         self._sidebar.pack(side='left', fill='y')
@@ -1355,86 +1356,85 @@ class ModernApp(ctk.CTk):
 
         # Save location
         row1 = ctk.CTkFrame(input_frame, fg_color='transparent')
-        row1.pack(fill='x', padx=16, pady=(12, 4))
-        ctk.CTkLabel(row1, text=T('save_location'), text_color=TEXT_DIM, width=70,
-                     font=(ui_font(), 10), anchor='e').pack(side='left')
+        row1.pack(fill='x', padx=20, pady=(14, 5))
+        ctk.CTkLabel(row1, text=T('save_location'), text_color=TEXT_SEC, width=86,
+                     font=(ui_font(), 11, 'bold'), anchor='w').pack(side='left')
         self._dest_var = ctk.StringVar(value=self._dest)
         ctk.CTkEntry(row1, textvariable=self._dest_var,
-                     height=34, corner_radius=8,
+                     height=38, corner_radius=CONTROL_RADIUS,
                      fg_color=BG_INPUT, border_color=BORDER, border_width=1,
-                     text_color=TEXT_PRI).pack(side='left', fill='x',
+                     text_color=TEXT_PRI, font=(ui_font(), 11)).pack(side='left', fill='x',
                                                expand=True, padx=10)
-        ctk.CTkButton(row1, text=T('browse_folder'), width=60, height=34, corner_radius=8,
+        ctk.CTkButton(row1, text=T('browse_folder'), width=72, height=38, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._pick_dest).pack(side='left')
-        ctk.CTkButton(row1, text=T('open_btn'), width=50, height=34, corner_radius=8,
+        ctk.CTkButton(row1, text=T('open_btn'), width=60, height=38, corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
                       command=self._open_dest_folder).pack(side='left', padx=(6, 0))
 
         # Download URL
         row2 = ctk.CTkFrame(input_frame, fg_color='transparent')
-        row2.pack(fill='x', padx=16, pady=(0, 12))
-        ctk.CTkLabel(row2, text=T('url_label'), text_color=TEXT_DIM, width=70,
-                     font=(ui_font(), 10), anchor='e').pack(side='left')
+        row2.pack(fill='x', padx=20, pady=(0, 14))
+        ctk.CTkLabel(row2, text=T('url_label'), text_color=TEXT_SEC, width=86,
+                     font=(ui_font(), 11, 'bold'), anchor='w').pack(side='left')
         self._dl_url_var = ctk.StringVar(value=self._url_input)
         ctk.CTkEntry(row2, textvariable=self._dl_url_var,
-                     height=34, corner_radius=8,
+                     height=38, corner_radius=CONTROL_RADIUS,
                      fg_color=BG_INPUT, border_color=BORDER, border_width=1,
-                     text_color=TEXT_PRI).pack(side='left', fill='x',
+                     text_color=TEXT_PRI, font=('Consolas', 10)).pack(side='left', fill='x',
                                                expand=True, padx=10)
 
         # Separator
         ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
 
         # ── Action bar ──────────────────────────────────────────────
-        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=50)
+        bar = ctk.CTkFrame(tab, fg_color=BG_HEADER, corner_radius=0, height=58)
         bar.pack(fill='x')
         bar.pack_propagate(False)
+        bar.grid_columnconfigure(1, weight=1)
 
-        # Primary actions (left)
-        ctk.CTkButton(bar, text=T('download_btn'), width=95, height=34, corner_radius=8,
+        actions_left = ctk.CTkFrame(bar, fg_color='transparent')
+        actions_left.grid(row=0, column=0, padx=(16, 8), pady=10, sticky='w')
+        ctk.CTkButton(actions_left, text=T('download_btn'), width=112, height=38,
+                      corner_radius=CONTROL_RADIUS,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=('#FFFFFF', '#FFFFFF'),
+                      text_color=WHITE,
                       font=(ui_font(), 11, 'bold'),
-                      command=self._download_url).pack(side='left', padx=(12, 4), pady=8)
-        ctk.CTkButton(bar, text=T('download_all_btn'), width=120, height=34, corner_radius=8,
-                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=('#FFFFFF', '#FFFFFF'),
-                      command=self._download_all).pack(side='left', padx=4)
-
-        # Left separator
-        ctk.CTkFrame(bar, width=1, fg_color=BORDER).pack(
-            side='left', fill='y', pady=12, padx=8)
-
-        # Destructive actions (right)
-        ctk.CTkButton(bar, text=T('clear_list'), width=60, height=34, corner_radius=8,
+                      command=self._download_url).pack(side='left')
+        ctk.CTkButton(actions_left, text=T('download_all_btn'), width=126, height=38,
+                      corner_radius=CONTROL_RADIUS,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
-                      hover_color=BG_CARD_HOVER, text_color=ERROR_C,
-                      command=self._clear_queue).pack(side='right', padx=(4, 12), pady=8)
-        ctk.CTkButton(bar, text=T('cancel_all'), width=80, height=34, corner_radius=8,
-                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
-                      hover_color=BG_CARD_HOVER, text_color=ERROR_C,
-                      command=self._cancel_all).pack(side='right', padx=4)
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+                      command=self._download_all).pack(side='left', padx=(8, 0))
 
-        # Right separator
-        ctk.CTkFrame(bar, width=1, fg_color=BORDER).pack(
-            side='right', fill='y', pady=12, padx=8)
-
-        # Speed control
-        ctk.CTkLabel(bar, text=T('speed_limit'), text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(side='right', padx=(0, 6))
+        speed = ctk.CTkFrame(bar, fg_color='transparent')
+        speed.grid(row=0, column=1, pady=10)
+        ctk.CTkLabel(speed, text=T('speed_limit'), text_color=TEXT_DIM,
+                     font=(ui_font(), 10)).pack(side='left', padx=(0, 8))
         self._speed_var = ctk.StringVar(value=self._speed_label())
-        ctk.CTkOptionMenu(bar, values=self._speed_values(),
-                          variable=self._speed_var,
-                          command=self._on_speed_change, width=100, height=34,
-                          corner_radius=8,
-                          fg_color=BG_INPUT, button_color=BORDER_HOVER,
-                          button_hover_color=ACCENT, text_color=TEXT_PRI,
-                          dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
-                          dropdown_text_color=TEXT_PRI
-                          ).pack(side='right', padx=4, pady=8)
+        ctk.CTkOptionMenu(
+            speed, values=self._speed_values(), variable=self._speed_var,
+            command=self._on_speed_change, width=118, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER, dropdown_text_color=TEXT_PRI,
+            font=(ui_font(), 10), dropdown_font=(ui_font(), 10)).pack(side='left')
+
+        destructive = ctk.CTkFrame(bar, fg_color='transparent')
+        destructive.grid(row=0, column=2, padx=(8, 16), pady=10, sticky='e')
+        ctk.CTkButton(destructive, text=T('cancel_all'), width=88, height=38,
+                      corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=ERROR_C,
+                      command=self._cancel_all).pack(side='left')
+        ctk.CTkButton(destructive, text=T('clear_list'), width=70, height=38,
+                      corner_radius=CONTROL_RADIUS,
+                      fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
+                      hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+                      command=self._clear_queue).pack(side='left', padx=(8, 0))
 
         # Separator under action bar
         ctk.CTkFrame(tab, height=1, fg_color=BORDER, corner_radius=0).pack(fill='x')
@@ -1447,46 +1447,50 @@ class ModernApp(ctk.CTk):
         self._dl_scroll.pack(fill='both', expand=True)
 
     def _build_update_card(self, content):
-        upd = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+        upd = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                            border_width=1, border_color=BORDER_CARD)
         upd.pack(fill='x', pady=(0, 16))
 
         upd_hdr = ctk.CTkFrame(upd, fg_color='transparent')
         upd_hdr.pack(fill='x', padx=20, pady=(16, 12))
         ctk.CTkLabel(upd_hdr, text=T('update_card_title'),
-                     font=(ui_font(), 14, 'bold'),
+                     font=(ui_font(), 15, 'bold'),
                      text_color=TEXT_PRI).pack(side='left')
 
         ctk.CTkFrame(upd, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
         row_info = ctk.CTkFrame(upd, fg_color='transparent')
-        row_info.pack(fill='x', padx=20, pady=(16, 4))
-        ctk.CTkLabel(row_info, text=T('update_current', version=APP_VERSION),
-                     font=(ui_font(), 11),
-                     text_color=TEXT_PRI).pack(side='left')
+        row_info.pack(fill='x', padx=20, pady=(14, 16))
+
+        row_actions = ctk.CTkFrame(row_info, fg_color='transparent')
+        row_actions.pack(side='right', anchor='e')
+
+        left_info = ctk.CTkFrame(row_info, fg_color='transparent')
+        left_info.pack(side='left', fill='x', expand=True, padx=(0, 16))
+        ctk.CTkLabel(left_info, text=T('update_current', version=APP_VERSION),
+                     font=(ui_font(), 12, 'bold'),
+                     text_color=TEXT_PRI).pack(anchor='w')
 
         self._update_status_lbl = ctk.CTkLabel(
-            upd, text='', text_color=TEXT_DIM, font=(ui_font(), 10))
-        self._update_status_lbl.pack(anchor='w', padx=20, pady=(2, 4))
+            left_info, text='', text_color=TEXT_DIM, font=(ui_font(), 11))
+        self._update_status_lbl.pack(anchor='w', pady=(3, 0))
 
         self._update_note_lbl = ctk.CTkLabel(
-            upd, text='', text_color=TEXT_DIM, font=(ui_font(), 9),
-            wraplength=760, justify='left')
-        self._update_note_lbl.pack(anchor='w', padx=20, pady=(0, 8))
+            left_info, text='', text_color=TEXT_DIM, font=(ui_font(), 10),
+            wraplength=620, justify='left')
+        self._update_note_lbl.pack(anchor='w', pady=(1, 0))
 
-        row_actions = ctk.CTkFrame(upd, fg_color='transparent')
-        row_actions.pack(fill='x', padx=20, pady=(4, 18))
         self._update_check_btn = ctk.CTkButton(
-            row_actions, text=T('update_check_btn'), width=130, height=34,
-            corner_radius=8, fg_color='transparent', border_width=1,
+            row_actions, text=T('update_check_btn'), width=138, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent', border_width=1,
             border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
             text_color=TEXT_PRI,
             command=lambda: self._start_update_check(manual=True))
         self._update_check_btn.pack(side='left')
         self._update_now_btn = ctk.CTkButton(
-            row_actions, text=T('update_now_btn'), width=110, height=34,
-            corner_radius=8, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=('#FFFFFF', '#FFFFFF'),
+            row_actions, text=T('update_now_btn'), width=118, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=WHITE,
             command=self._start_update_install)
         self._refresh_update_ui()
 
@@ -1502,22 +1506,22 @@ class ModernApp(ctk.CTk):
 
         # Content container
         content = ctk.CTkFrame(outer, fg_color='transparent')
-        content.pack(fill='x', padx=40, pady=24)
+        content.pack(fill='x', padx=64, pady=28)
 
         # ── Page title ──────────────────────────────────────────────
         title_row = ctk.CTkFrame(content, fg_color='transparent')
-        title_row.pack(fill='x', pady=(0, 20))
+        title_row.pack(fill='x', pady=(0, 22))
         ctk.CTkLabel(title_row, text=T('settings_title'),
-                     font=(ui_font(), 20, 'bold'),
-                     text_color=TEXT_PRI).pack(side='left')
+                     font=(ui_font(), 22, 'bold'),
+                     text_color=TEXT_PRI).pack(anchor='w')
         ctk.CTkLabel(title_row, text=T('settings_desc'),
-                     font=(ui_font(), 10),
-                     text_color=TEXT_DIM).pack(side='left', padx=(16, 0))
+                     font=(ui_font(), 11),
+                     text_color=TEXT_DIM).pack(anchor='w', pady=(4, 0))
 
         self._build_update_card(content)
 
         # ── Download Settings Card ──────────────────────────────────
-        grp = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+        grp = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                             border_width=1, border_color=BORDER_CARD)
         grp.pack(fill='x', pady=(0, 16))
 
@@ -1525,7 +1529,7 @@ class ModernApp(ctk.CTk):
         grp_hdr = ctk.CTkFrame(grp, fg_color='transparent')
         grp_hdr.pack(fill='x', padx=20, pady=(16, 12))
         ctk.CTkLabel(grp_hdr, text=T('download_settings'),
-                     font=(ui_font(), 14, 'bold'),
+                     font=(ui_font(), 15, 'bold'),
                      text_color=TEXT_PRI).pack(side='left')
 
         ctk.CTkFrame(grp, height=1, fg_color=BORDER).pack(fill='x', padx=20)
@@ -1534,10 +1538,10 @@ class ModernApp(ctk.CTk):
         row_dest = ctk.CTkFrame(grp, fg_color='transparent')
         row_dest.pack(fill='x', padx=20, pady=(16, 2))
         ctk.CTkLabel(row_dest, text=T('save_location_setting'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         ctk.CTkEntry(row_dest, textvariable=self._dest_var,
-                     height=34, corner_radius=8,
+                     height=38, corner_radius=CONTROL_RADIUS,
                      fg_color=BG_INPUT, border_color=BORDER, border_width=1,
                      text_color=TEXT_PRI).pack(side='left', fill='x',
                                                expand=True, padx=10)
@@ -1547,13 +1551,13 @@ class ModernApp(ctk.CTk):
                       command=self._pick_dest).pack(side='left')
         ctk.CTkLabel(grp, text=T('save_location_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Speed limit
         row_speed = ctk.CTkFrame(grp, fg_color='transparent')
         row_speed.pack(fill='x', padx=20, pady=(8, 2))
         ctk.CTkLabel(row_speed, text=T('speed_limit_setting'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         ctk.CTkOptionMenu(row_speed, values=self._speed_values(),
                           variable=self._speed_var,
@@ -1565,13 +1569,13 @@ class ModernApp(ctk.CTk):
                           dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(grp, text=T('speed_limit_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Concurrent downloads
         row_conc = ctk.CTkFrame(grp, fg_color='transparent')
         row_conc.pack(fill='x', padx=20, pady=(8, 2))
         ctk.CTkLabel(row_conc, text=T('concurrent_setting'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         self._conc_var = ctk.StringVar(value=str(self._dlmgr.max_concurrent))
         ctk.CTkOptionMenu(row_conc,
@@ -1588,13 +1592,13 @@ class ModernApp(ctk.CTk):
                      font=(ui_font(), 10)).pack(side='left')
         ctk.CTkLabel(grp, text=T('concurrent_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=(110, 0), pady=(0, 8))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
 
         # Resolution preference
         row_res = ctk.CTkFrame(grp, fg_color='transparent')
         row_res.pack(fill='x', padx=20, pady=(8, 2))
         ctk.CTkLabel(row_res, text=T('resolution_setting'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         self._res_var = ctk.StringVar(value=self._resolution_label())
         ctk.CTkOptionMenu(row_res,
@@ -1608,21 +1612,21 @@ class ModernApp(ctk.CTk):
                           dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(grp, text=T('resolution_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=(110, 0), pady=(0, 20))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 22))
 
         # Cloudflare bypass
-        cf = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+        cf = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                           border_width=1, border_color=BORDER_CARD)
         cf.pack(fill='x', pady=(0, 16))
 
         cf_hdr = ctk.CTkFrame(cf, fg_color='transparent')
         cf_hdr.pack(fill='x', padx=20, pady=(16, 4))
         ctk.CTkLabel(cf_hdr, text=T('cf_card_title'),
-                     font=(ui_font(), 14, 'bold'),
+                     font=(ui_font(), 15, 'bold'),
                      text_color=TEXT_PRI).pack(side='left')
         ctk.CTkLabel(cf, text=T('cf_card_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=20, pady=(0, 12))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
 
         ctk.CTkFrame(cf, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
@@ -1635,7 +1639,7 @@ class ModernApp(ctk.CTk):
         row_host = ctk.CTkFrame(cf, fg_color='transparent')
         row_host.pack(fill='x', padx=20, pady=(16, 2))
         ctk.CTkLabel(row_host, text=T('cf_host_label'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         ctk.CTkOptionMenu(row_host, values=hosts,
                           variable=self._cf_host_var,
@@ -1649,7 +1653,7 @@ class ModernApp(ctk.CTk):
         row_cookie = ctk.CTkFrame(cf, fg_color='transparent')
         row_cookie.pack(fill='x', padx=20, pady=(8, 2))
         ctk.CTkLabel(row_cookie, text=T('cf_cookie_label'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         ctk.CTkEntry(row_cookie, textvariable=self._cf_cookie_var,
                      height=34, corner_radius=8,
@@ -1660,7 +1664,7 @@ class ModernApp(ctk.CTk):
         row_ua = ctk.CTkFrame(cf, fg_color='transparent')
         row_ua.pack(fill='x', padx=20, pady=(8, 2))
         ctk.CTkLabel(row_ua, text=T('cf_ua_label'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         ctk.CTkEntry(row_ua, textvariable=self._cf_ua_var,
                      height=34, corner_radius=8,
@@ -1672,8 +1676,8 @@ class ModernApp(ctk.CTk):
         row_actions.pack(fill='x', padx=20, pady=(10, 2))
         ctk.CTkButton(row_actions, text=T('cf_save'), width=70, height=34, corner_radius=8,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      text_color=('#FFFFFF', '#FFFFFF'),
-                      command=self._on_cf_save).pack(side='left', padx=(100, 6))
+                      text_color=WHITE,
+                      command=self._on_cf_save).pack(side='left', padx=(126, 6))
         ctk.CTkButton(row_actions, text=T('cf_clear'), width=70, height=34, corner_radius=8,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
@@ -1681,7 +1685,7 @@ class ModernApp(ctk.CTk):
 
         self._cf_status_lbl = ctk.CTkLabel(cf, text='', text_color=TEXT_SEC,
                                            font=(ui_font(), 10))
-        self._cf_status_lbl.pack(anchor='w', padx=(120, 20), pady=(6, 4))
+        self._cf_status_lbl.pack(anchor='w', padx=(146, 20), pady=(6, 4))
 
         ctk.CTkLabel(cf, text=T('cf_help'),
                      text_color=TEXT_DIM,
@@ -1693,25 +1697,25 @@ class ModernApp(ctk.CTk):
         self._refresh_cf_status()
 
         # Saved download queue
-        queue = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+        queue = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                              border_width=1, border_color=BORDER_CARD)
         queue.pack(fill='x', pady=(0, 16))
 
         queue_hdr = ctk.CTkFrame(queue, fg_color='transparent')
         queue_hdr.pack(fill='x', padx=20, pady=(16, 4))
         ctk.CTkLabel(queue_hdr, text=T('queue_card_title'),
-                     font=(ui_font(), 14, 'bold'),
+                     font=(ui_font(), 15, 'bold'),
                      text_color=TEXT_PRI).pack(side='left')
         ctk.CTkLabel(queue, text=T('queue_card_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 9)).pack(anchor='w', padx=20, pady=(0, 12))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
 
         ctk.CTkFrame(queue, height=1, fg_color=BORDER).pack(fill='x', padx=20)
 
         row_queue_path = ctk.CTkFrame(queue, fg_color='transparent')
         row_queue_path.pack(fill='x', padx=20, pady=(16, 2))
         ctk.CTkLabel(row_queue_path, text=T('queue_path_label'), text_color=TEXT_PRI,
-                     font=(ui_font(), 11), width=90,
+                     font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         queue_path_entry = ctk.CTkEntry(
             row_queue_path, height=34, corner_radius=8,
@@ -1727,7 +1731,7 @@ class ModernApp(ctk.CTk):
                       width=110, height=34, corner_radius=8,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                       hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-                      command=self._open_queue_folder).pack(side='left', padx=(100, 6))
+                      command=self._open_queue_folder).pack(side='left', padx=(126, 6))
         ctk.CTkButton(row_queue_actions, text=T('clear_saved_queue'),
                       width=140, height=34, corner_radius=8,
                       fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
@@ -1735,14 +1739,14 @@ class ModernApp(ctk.CTk):
                       command=self._clear_saved_queue).pack(side='left')
 
         # ── About Card ──────────────────────────────────────────────
-        about = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=12,
+        about = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                               border_width=1, border_color=BORDER_CARD)
         about.pack(fill='x', pady=(0, 16))
 
         about_hdr = ctk.CTkFrame(about, fg_color='transparent')
         about_hdr.pack(fill='x', padx=20, pady=(16, 12))
         ctk.CTkLabel(about_hdr, text=T('about'),
-                     font=(ui_font(), 14, 'bold'),
+                     font=(ui_font(), 15, 'bold'),
                      text_color=TEXT_PRI).pack(side='left')
 
         ctk.CTkFrame(about, height=1, fg_color=BORDER).pack(fill='x', padx=20)
@@ -1925,12 +1929,20 @@ class ModernApp(ctk.CTk):
                          font=(ui_font(), 14)).pack(pady=40)
             return
 
-        # Create grid of cards, 4 per row
+        # Responsive card density: 2 compact / 3 default / 4 wide.
+        columns = max(2, self._grid_columns)
+        try:
+            logical_width = self.winfo_width() / max(self._get_window_scaling(), 1.0)
+        except Exception:
+            logical_width = self.winfo_width()
+        estimated_card_width = max(
+            240, int((max(logical_width, 980) - 240) / columns) - 24)
+        title_wrap = max(180, min(330, estimated_card_width - 34))
         row_frame = None
         for i, v in enumerate(self._videos):
-            if i % 4 == 0:
+            if i % columns == 0:
                 row_frame = ctk.CTkFrame(self._grid_scroll, fg_color='transparent')
-                row_frame.pack(fill='x', padx=12, pady=6)
+                row_frame.pack(fill='x', padx=14, pady=7)
 
             url = v.get('url', '')
             title = v.get('title', '')
@@ -1939,20 +1951,20 @@ class ModernApp(ctk.CTk):
             is_sel = url in self._selected_urls
 
             card = ctk.CTkFrame(row_frame, fg_color=ACCENT_DIM if is_sel else BG_CARD,
-                                corner_radius=12,
+                                corner_radius=CARD_RADIUS,
                                 border_width=2 if is_sel else 1,
-                                border_color=ACCENT if is_sel else BORDER)
-            card.pack(side='left', padx=6, pady=6, fill='x', expand=True)
+                                border_color=ACCENT if is_sel else BORDER_CARD)
+            card.pack(side='left', padx=7, pady=7, fill='x', expand=True)
 
             # Thumbnail placeholder (16:9)
             thumb_holder = ctk.CTkFrame(card, fg_color=BG_SIDEBAR,
-                                         height=_THUMB_SIZE[1], corner_radius=8)
-            thumb_holder.pack(fill='x', padx=8, pady=(8, 0))
+                                         height=_THUMB_SIZE[1], corner_radius=6)
+            thumb_holder.pack(fill='x', padx=10, pady=(10, 0))
             thumb_holder.pack_propagate(False)
             thumb_lbl = ctk.CTkLabel(thumb_holder, text=T('loading_browse'),
                                       text_color=TEXT_DIM,
                                       fg_color='transparent',
-                                      font=(ui_font(), 10))
+                                      font=(ui_font(), 11))
             thumb_lbl.pack(expand=True)
 
             # Duration badge
@@ -1965,11 +1977,11 @@ class ModernApp(ctk.CTk):
                 dur_lbl.place(relx=1.0, rely=1.0, anchor='se', x=-6, y=-6)
 
             # Title
-            title_text = title[:55] + '...' if len(title) > 55 else title
+            title_text = title[:72] + '...' if len(title) > 72 else title
             title_row = ctk.CTkFrame(card, fg_color='transparent')
-            title_row.pack(fill='x', padx=10, pady=(8, 2))
+            title_row.pack(fill='x', padx=12, pady=(10, 5))
             version_badge = self._video_version_badge(url, title)
-            wrap = 190 if version_badge else 230
+            wrap = title_wrap - 44 if version_badge else title_wrap
             if version_badge:
                 badge_text, badge_color = version_badge
                 ctk.CTkLabel(title_row, text=badge_text,
@@ -1978,24 +1990,24 @@ class ModernApp(ctk.CTk):
                              font=(ui_font(), 9, 'bold')).pack(
                     side='left', padx=(0, 6), anchor='n')
             ctk.CTkLabel(title_row, text=title_text, text_color=TEXT_PRI,
-                         font=(ui_font(), 10),
+                         font=(ui_font(), 11),
                          wraplength=wrap, justify='left').pack(
                 side='left', fill='x', expand=True, anchor='w')
 
             # Bottom row
             bottom = ctk.CTkFrame(card, fg_color='transparent')
-            bottom.pack(fill='x', padx=10, pady=(0, 10))
+            bottom.pack(fill='x', padx=12, pady=(0, 12))
 
             sel_text = ('✓ ' + T('selected')) if is_sel else T('select')
             sel_btn = ctk.CTkButton(
-                bottom, text=sel_text, width=64, height=26,
-                corner_radius=8,
+                bottom, text=sel_text, width=76, height=30,
+                corner_radius=CONTROL_RADIUS,
                 fg_color=ACCENT if is_sel else 'transparent',
                 border_width=0 if is_sel else 1,
                 border_color=BORDER_HOVER,
                 hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
                 text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI,
-                font=(ui_font(), 9),
+                font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10),
                 command=lambda u=url: self._toggle_select(u)
             )
             sel_btn.pack(side='right')
@@ -2060,17 +2072,23 @@ class ModernApp(ctk.CTk):
                 w['card'].configure(
                     fg_color=ACCENT_DIM if is_sel else BG_CARD,
                     border_width=2 if is_sel else 1,
-                    border_color=ACCENT if is_sel else BORDER)
+                    border_color=ACCENT if is_sel else BORDER_CARD)
                 w['sel_btn'].configure(
                     text=('✓ ' + T('selected')) if is_sel else T('select'),
                     fg_color=ACCENT if is_sel else 'transparent',
                     border_width=0 if is_sel else 1,
                     hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
-                    text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI)
+                    text_color=WHITE if is_sel else TEXT_PRI,
+                    font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10))
             except Exception:
                 pass
+        self._update_selection_count()
+
+    def _update_selection_count(self):
         n = len(self._selected_urls)
-        self._sel_lbl.configure(text=f'{n} {T("selected")}' if n else '')
+        self._sel_lbl.configure(
+            text=f'{n} {T("selected")}',
+            text_color=ACCENT if n else TEXT_SEC)
 
     def _set_card_selected(self, url: str, is_sel: bool):
         w = self._card_widgets.get(url)
@@ -2080,13 +2098,14 @@ class ModernApp(ctk.CTk):
             w['card'].configure(
                 fg_color=ACCENT_DIM if is_sel else BG_CARD,
                 border_width=2 if is_sel else 1,
-                border_color=ACCENT if is_sel else BORDER)
+                border_color=ACCENT if is_sel else BORDER_CARD)
             w['sel_btn'].configure(
                 text=('✓ ' + T('selected')) if is_sel else T('select'),
                 fg_color=ACCENT if is_sel else 'transparent',
                 border_width=0 if is_sel else 1,
                 hover_color=ACCENT_HOVER if is_sel else BG_CARD_HOVER,
-                text_color=('#FFFFFF', '#FFFFFF') if is_sel else TEXT_PRI)
+                text_color=WHITE if is_sel else TEXT_PRI,
+                font=(ui_font(), 10, 'bold') if is_sel else (ui_font(), 10))
         except Exception:
             pass
 
@@ -2095,7 +2114,7 @@ class ModernApp(ctk.CTk):
         self._selected_urls.clear()
         for url in selected:
             self._set_card_selected(url, False)
-        self._sel_lbl.configure(text='')
+        self._update_selection_count()
 
     def _goto_page(self, p: int):
         if p < 1:
@@ -2122,14 +2141,13 @@ class ModernApp(ctk.CTk):
             if url:
                 self._selected_urls.add(url)
                 self._set_card_selected(url, True)
-        n = len(self._selected_urls)
-        self._sel_lbl.configure(text=f'{n} {T("selected")}' if n else '')
+        self._update_selection_count()
 
     def _on_site_change(self, val):
         self._site_key = val
         self._categories.clear()
         self._selected_urls.clear()
-        self._sel_lbl.configure(text='')
+        self._update_selection_count()
         self._rebuild_sidebar()
         self._load_categories()
 
@@ -2145,7 +2163,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
-        self._sel_lbl.configure(text='')
+        self._update_selection_count()
         self._load_page()
 
     def _on_search(self):
@@ -2171,7 +2189,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
-        self._sel_lbl.configure(text='')
+        self._update_selection_count()
         self._load_page()
 
     def _on_tag_click(self, url: str, name: str):
@@ -2182,7 +2200,7 @@ class ModernApp(ctk.CTk):
         self._browse_blocked = False
         self._browse_empty_message = ''
         self._selected_urls.clear()
-        self._sel_lbl.configure(text='')
+        self._update_selection_count()
         self._cat_var.set(f'🏷 {name}')
         self._load_page()
 
@@ -2193,8 +2211,8 @@ class ModernApp(ctk.CTk):
 
         ctk.CTkLabel(self._sidebar, text=T('sidebar_title'),
                      text_color=ACCENT,
-                     font=(ui_font(), 13, 'bold')).pack(
-            anchor='w', padx=12, pady=(12, 8))
+                     font=(ui_font(), 14, 'bold')).pack(
+            anchor='w', padx=14, pady=(14, 10))
 
         # Subtle divider
         ctk.CTkFrame(self._sidebar, height=1,
@@ -2510,6 +2528,11 @@ class ModernApp(ctk.CTk):
         '已下載': SUCCESS, '未完成': WARNING, '已取消': TEXT_DIM,
         '網址錯誤': ERROR_C, '封鎖/解析失敗': ERROR_C,
     }
+    _STATE_BACKGROUNDS = {
+        '下載中': ACCENT_DIM, '準備中': WARNING_DIM, '等待中': WARNING_DIM,
+        '已下載': SUCCESS_DIM, '未完成': WARNING_DIM, '已取消': BG_BADGE,
+        '網址錯誤': ERROR_DIM, '封鎖/解析失敗': ERROR_DIM,
+    }
 
     def _sync_dl_footer(self, hidden: int):
         if hidden > 0:
@@ -2679,60 +2702,75 @@ class ModernApp(ctk.CTk):
         color = self._STATE_COLORS.get(item.state, TEXT_SEC)
         row = None
         try:
-            row = ctk.CTkFrame(self._dl_scroll, fg_color=BG_CARD, corner_radius=10,
-                               border_width=1, border_color=BORDER,
-                               height=58)
-            row.pack(fill='x', padx=12, pady=6)
+            row = ctk.CTkFrame(
+                self._dl_scroll, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+                border_width=1, border_color=BORDER_CARD, height=76)
+            row.pack(fill='x', padx=16, pady=7)
             row.pack_propagate(False)
 
-            state_lbl = ctk.CTkLabel(row, text=state_label(item.state) if item.state else '—',
-                                     text_color=color,
-                                     font=(ui_font(), 10, 'bold'),
-                                     width=68)
-            state_lbl.pack(side='left', padx=(14, 6))
+            state_holder = ctk.CTkFrame(
+                row, width=92, height=32, corner_radius=6,
+                fg_color=self._STATE_BACKGROUNDS.get(item.state, BG_BADGE))
+            state_holder.pack(side='left', padx=(14, 10))
+            state_holder.pack_propagate(False)
+            state_lbl = ctk.CTkLabel(
+                state_holder, text=state_label(item.state) if item.state else '—',
+                text_color=color, font=(ui_font(), 10, 'bold'))
+            state_lbl.pack(fill='both', expand=True, padx=6)
 
-            name_lbl = ctk.CTkLabel(row, text=item.name or item.url,
-                                    text_color=TEXT_PRI,
-                                    font=(ui_font(), 10),
-                                    anchor='w')
-            name_lbl.pack(side='left', fill='x', expand=True, padx=6)
-
-            # Progress widgets (created once, packed/unpacked dynamically)
-            pb = ctk.CTkProgressBar(row, width=130, height=10,
-                                    corner_radius=5,
-                                    fg_color=BG_INPUT,
-                                    progress_color=SUCCESS)
-            pb.set(max(0.0, min(1.0, item.progress / 100)))
-            pct_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
-                                   font=('Consolas', 9), width=40)
-            spd_lbl = ctk.CTkLabel(row, text='', text_color=TEXT_SEC,
-                                   font=('Consolas', 9), width=80)
-
-            # Remove button
             remove_btn = ctk.CTkButton(
-                row, text='✕', width=30, height=30,
-                corner_radius=8,
+                row, text='✕', width=32, height=32,
+                corner_radius=CONTROL_RADIUS,
                 fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER,
                 text_color=TEXT_DIM, font=('Consolas', 12),
                 command=lambda u=item.url: self._dlmgr.remove_item(u))
-            remove_btn.pack(side='right', padx=(6, 12))
+            remove_btn.pack(side='right', padx=(6, 14))
 
             retry_btn = ctk.CTkButton(
-                row, text='↻', width=30, height=30,
-                corner_radius=8,
+                row, text='↻', width=32, height=32,
+                corner_radius=CONTROL_RADIUS,
                 fg_color='transparent', border_width=1, border_color=BORDER_HOVER,
                 hover_color=BG_CARD_HOVER,
                 text_color=ACCENT, font=('Consolas', 14, 'bold'),
                 command=lambda u=item.url: self._retry_download(u))
 
+            metrics = ctk.CTkFrame(row, fg_color='transparent')
+            metrics.pack(side='right', padx=(6, 2))
+
+            # Progress widgets (created once, packed/unpacked dynamically)
+            pb = ctk.CTkProgressBar(metrics, width=150, height=8,
+                                    corner_radius=5,
+                                    fg_color=BG_INPUT,
+                                    progress_color=ACCENT)
+            pb.set(max(0.0, min(1.0, item.progress / 100)))
+            pct_lbl = ctk.CTkLabel(
+                metrics, text='', text_color=TEXT_SEC,
+                font=('Consolas', 10, 'bold'), width=46)
+            spd_lbl = ctk.CTkLabel(
+                metrics, text='', text_color=TEXT_SEC,
+                font=('Consolas', 9), width=76)
+
+            text_stack = ctk.CTkFrame(row, fg_color='transparent')
+            text_stack.pack(side='left', fill='both', expand=True, padx=(0, 10), pady=10)
+            name_lbl = ctk.CTkLabel(
+                text_stack, text=item.name or item.url, text_color=TEXT_PRI,
+                font=(ui_font(), 11, 'bold'), anchor='w')
+            name_lbl.pack(fill='x', anchor='w')
+            detail_lbl = ctk.CTkLabel(
+                text_stack, text=item.url, text_color=TEXT_DIM,
+                font=('Consolas', 9), anchor='w')
+            detail_lbl.pack(fill='x', anchor='w', pady=(3, 0))
+
             widgets = {
-                'row': row, 'state_lbl': state_lbl, 'name_lbl': name_lbl,
+                'row': row, 'state_holder': state_holder,
+                'state_lbl': state_lbl, 'name_lbl': name_lbl,
+                'detail_lbl': detail_lbl, 'metrics': metrics,
                 'pb': pb, 'pct_lbl': pct_lbl, 'spd_lbl': spd_lbl,
                 'retry_btn': retry_btn, '_before_remove': remove_btn,
                 'pb_visible': False, 'pct_visible': False, 'spd_visible': False,
                 'retry_visible': False,
-                'last_state': None, 'last_name': None, 'last_error': None,
+                'last_state': None, 'last_name': None, 'last_detail': None,
                 'last_progress': -1, 'last_speed': None,
             }
             self._update_dl_row(widgets, item)
@@ -2751,6 +2789,8 @@ class ModernApp(ctk.CTk):
         if w['last_state'] != item.state:
             color = self._STATE_COLORS.get(item.state, TEXT_SEC)
             try:
+                w['state_holder'].configure(
+                    fg_color=self._STATE_BACKGROUNDS.get(item.state, BG_BADGE))
                 w['state_lbl'].configure(
                     text=state_label(item.state) if item.state else '—',
                     text_color=color)
@@ -2758,21 +2798,29 @@ class ModernApp(ctk.CTk):
                 return
             w['last_state'] = item.state
 
-        # Name (may arrive after creation once metadata is scraped)
+        # Name and supporting detail (error or source URL) are separate levels.
         display_name = item.name or item.url
+        detail = item.url
+        detail_color = TEXT_DIM
         if item.error and item.state in ('未完成', '封鎖/解析失敗'):
             err_text = T('blocked_vpn_hint') if item.error == ERR_BLOCKED else item.error
             err = err_text.replace('\n', ' ').strip()
-            if len(err) > 80:
-                err = err[:77] + '...'
-            display_name = f'{display_name} - {err}'
-        if w['last_name'] != display_name or w['last_error'] != item.error:
+            if len(err) > 110:
+                err = err[:107] + '...'
+            detail = err
+            detail_color = ERROR_C
+        if w['last_name'] != display_name:
             try:
                 w['name_lbl'].configure(text=display_name)
             except Exception:
                 return
             w['last_name'] = display_name
-            w['last_error'] = item.error
+        if w['last_detail'] != detail:
+            try:
+                w['detail_lbl'].configure(text=detail, text_color=detail_color)
+            except Exception:
+                return
+            w['last_detail'] = detail
 
         retryable = item.state in ('未完成', '封鎖/解析失敗', '已取消')
         if retryable and not w['retry_visible']:
@@ -2789,8 +2837,7 @@ class ModernApp(ctk.CTk):
         is_downloading = (item.state == '下載中' and item.progress > 0)
         if is_downloading:
             if not w['pb_visible']:
-                w['pb'].pack(side='left', padx=4, before=w.get('_before_remove', None))
-                # If before-widget ref not set, fall back to simple pack (still side='left')
+                w['pb'].pack(side='left', padx=(0, 4))
                 w['pb_visible'] = True
             if w['last_progress'] != item.progress:
                 w['pb'].set(max(0.0, min(1.0, item.progress / 100)))
@@ -2812,7 +2859,7 @@ class ModernApp(ctk.CTk):
                 w['pct_visible'] = False
 
         # Speed
-        if item.speed:
+        if is_downloading and item.speed:
             if not w['spd_visible']:
                 w['spd_lbl'].pack(side='left', padx=4)
                 w['spd_visible'] = True
