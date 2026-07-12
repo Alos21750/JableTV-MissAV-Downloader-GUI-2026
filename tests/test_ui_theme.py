@@ -52,16 +52,18 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
         assert _contrast(ui_theme.TEXT_PRI[index], ui_theme.BG_CARD[index]) >= 7
 
 
-def test_v254_version_and_new_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.24'
+def test_v255_version_and_new_smalltool_copy_are_complete():
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.25'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
         'st_scanning', 'st_downloading', 'st_scan_progress',
         'st_candidates_found',
+        'st_calendar', 'st_date_quick', 'st_date_month_1',
+        'st_date_month_2', 'st_folder_error',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v2.5.24', language
+        assert strings['version_label'] == 'v2.5.25', language
         assert required <= strings.keys(), language
 
 

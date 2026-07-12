@@ -9,6 +9,7 @@ daily and downloads any new video it hasn't seen before.
 Author: ALOS
 """
 
+import calendar
 import ctypes
 import json
 import os
@@ -18,9 +19,10 @@ import threading
 import time
 import tkinter as tk
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from tkinter import filedialog, messagebox
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 import customtkinter as ctk
 
@@ -92,7 +94,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.24'
+APP_VERSION = '2.5.25'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -102,6 +104,7 @@ SCAN_RETRY_BACKOFF_SEC = 10 * 60
 MAX_SCAN_PAGES = 50
 DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
+MISSAV_VERSION_SUFFIXES = ('-uncensored-leak', '-chinese-subtitle')
 
 # ── Site / category registry ────────────────────────────────────────
 # The grouped stable-ID registry lives in smalltool_categories.py.
@@ -110,6 +113,83 @@ if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_output_folder() -> str:
+    """Portable fallback used when the user has not selected a folder."""
+    return os.path.join(APP_DIR, 'tmp')
+
+
+def _months_before(base_date: date, months: int) -> date:
+    """Return a calendar-month offset, clamping to the target month's last day."""
+    if months < 0:
+        raise ValueError('months must be non-negative')
+    month_index = base_date.year * 12 + base_date.month - 1 - months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    day = min(base_date.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _missav_slug(video: dict) -> str:
+    try:
+        path = urlsplit(video.get('url', '')).path
+        return unquote(path.rstrip('/').rsplit('/', 1)[-1]).casefold()
+    except (AttributeError, TypeError, ValueError):
+        return ''
+
+
+def _missav_video_code(video: dict) -> str:
+    """Canonical MissAV code, excluding verified presentation-version suffixes."""
+    slug = _missav_slug(video)
+    changed = True
+    while changed:
+        changed = False
+        for suffix in MISSAV_VERSION_SUFFIXES:
+            if slug.endswith(suffix):
+                slug = slug[:-len(suffix)]
+                changed = True
+                break
+    return slug
+
+
+def _is_missav_uncensored_leak(video: dict) -> bool:
+    return _missav_slug(video).endswith('-uncensored-leak')
+
+
+def _dedupe_missav_candidates(videos: list[dict]):
+    """Keep one MissAV item per code, preferring the uncensored-leak version."""
+    kept = []
+    missav_indexes = {}
+    decisions = []
+
+    for video in videos:
+        if video.get('_site') != 'MissAV':
+            kept.append(video)
+            continue
+
+        code = _missav_video_code(video)
+        if not code:
+            kept.append(video)
+            continue
+
+        existing_index = missav_indexes.get(code)
+        if existing_index is None:
+            missav_indexes[code] = len(kept)
+            kept.append(video)
+            continue
+
+        existing = kept[existing_index]
+        if existing.get('url') == video.get('url'):
+            continue
+        if (_is_missav_uncensored_leak(video) and
+                not _is_missav_uncensored_leak(existing)):
+            kept[existing_index] = video
+            decisions.append((existing, video, code))
+        else:
+            decisions.append((video, existing, code))
+
+    return kept, decisions
 
 
 def _fallback_state_dir() -> str:
@@ -183,11 +263,15 @@ def load_config() -> dict:
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                cfg = json.load(f)
+            if isinstance(cfg, dict):
+                if not str(cfg.get('output_folder') or '').strip():
+                    cfg['output_folder'] = _default_output_folder()
+                return cfg
         except Exception:
             pass
     return {
-        'output_folder': '',
+        'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
@@ -537,10 +621,8 @@ class SmallToolWorker:
             self._scan_lock.release()
 
     def _scan_and_download_locked(self, cfg: dict):
-        dest = cfg.get('output_folder') or ''
-        if not dest:
-            self._log(f'[WAIT] {T("st_no_output_configured")}')
-            return True
+        dest = str(cfg.get('output_folder') or '').strip() or _default_output_folder()
+        cfg['output_folder'] = dest
         os.makedirs(dest, exist_ok=True)
 
         targets = cfg.get('selected_targets', [])
@@ -719,6 +801,18 @@ class SmallToolWorker:
             cfg['first_run_done'] = True
             save_config(cfg)
             return True
+
+        all_new_videos, dedupe_decisions = _dedupe_missav_candidates(
+            all_new_videos)
+        for dropped, kept, code in dedupe_decisions:
+            dropped_slug = _missav_slug(dropped)
+            kept_slug = _missav_slug(kept)
+            self._log(
+                f'  [DEDUP] {code}: keep {kept_slug}; skip {dropped_slug}')
+            dropped_url = dropped.get('url', '')
+            if dropped_url and dropped_url != kept.get('url', ''):
+                self._mark_seen(
+                    dropped_url, dropped.get('title', ''), skipped=True)
 
         self._set_scan_state()
         self._set_status('st_downloading', ACCENT)
@@ -1158,7 +1252,8 @@ class SmallToolApp(ctk.CTk):
             cfg_card, text=T('st_save_location'), text_color=TEXT_SEC,
             font=(font_family, 11, 'bold'), width=98, anchor='w').grid(
                 row=0, column=0, padx=(16, 8), pady=(14, 8), sticky='w')
-        self._folder_var = tk.StringVar(value=self._cfg.get('output_folder', ''))
+        self._folder_var = tk.StringVar(
+            value=self._cfg.get('output_folder') or _default_output_folder())
         ctk.CTkEntry(
             cfg_card, textvariable=self._folder_var, height=38,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
@@ -1178,19 +1273,41 @@ class SmallToolApp(ctk.CTk):
 
         date_group = ctk.CTkFrame(options, fg_color='transparent')
         date_group.pack(side='left', fill='x', expand=True)
+        date_controls = ctk.CTkFrame(date_group, fg_color='transparent')
+        date_controls.pack(fill='x')
         ctk.CTkLabel(
-            date_group, text=T('st_baseline_date'), text_color=TEXT_SEC,
+            date_controls, text=T('st_baseline_date'), text_color=TEXT_SEC,
             font=(font_family, 10, 'bold')).pack(side='left')
         self._date_var = tk.StringVar(value=self._cfg.get('baseline_date', DEFAULT_BASELINE_DATE))
         ctk.CTkEntry(
-            date_group, textvariable=self._date_var, width=128, height=34,
+            date_controls, textvariable=self._date_var, width=116, height=34,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
             text_color=TEXT_PRI, font=('Consolas', 10)).pack(
-                side='left', padx=(8, 10))
+                side='left', padx=(8, 6))
+        ctk.CTkButton(
+            date_controls, text=T('st_calendar'), width=82, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(font_family, 9, 'bold'), command=self._open_calendar).pack(
+                side='left', padx=(0, 6))
+        self._date_preset_var = tk.StringVar(value=T('st_date_quick'))
+        ctk.CTkOptionMenu(
+            date_controls, variable=self._date_preset_var,
+            values=[label for label, _kind, _amount in self._date_presets()],
+            command=self._on_date_preset, width=132, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            button_color=BORDER_HOVER, button_hover_color=ACCENT,
+            text_color=TEXT_PRI, dropdown_fg_color=BG_CARD,
+            dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
+                side='left')
         ctk.CTkLabel(
             date_group, text=T('st_date_hint'), text_color=TEXT_DIM,
-            font=(font_family, 9), wraplength=340, justify='left').pack(side='left')
+            font=(font_family, 9), wraplength=440, justify='left').pack(
+                anchor='w', pady=(4, 0))
 
         res_group = ctk.CTkFrame(options, fg_color='transparent')
         res_group.pack(side='right', padx=(16, 0))
@@ -1530,6 +1647,163 @@ class SmallToolApp(ctk.CTk):
                     })
         return targets
 
+    def _date_presets(self):
+        return [
+            (T('st_date_yesterday'), 'days', 1),
+            (T('st_date_month_1'), 'months', 1),
+            (T('st_date_month_2'), 'months', 2),
+            (T('st_date_month_3'), 'months', 3),
+            (T('st_date_month_6'), 'months', 6),
+        ]
+
+    def _on_date_preset(self, selected_label: str):
+        today = datetime.now().astimezone().date()
+        for label, kind, amount in self._date_presets():
+            if label != selected_label:
+                continue
+            selected = (today - timedelta(days=amount)
+                        if kind == 'days' else _months_before(today, amount))
+            self._date_var.set(selected.isoformat())
+            return
+
+    def _open_calendar(self):
+        existing = getattr(self, '_calendar_popup', None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+
+        today = datetime.now().astimezone().date()
+        try:
+            selected = datetime.strptime(
+                self._date_var.get().strip(), '%Y-%m-%d').date()
+        except ValueError:
+            selected = today
+
+        popup = ctk.CTkToplevel(self)
+        self._calendar_popup = popup
+        popup.title(T('st_calendar_title'))
+        popup.geometry('364x448')
+        popup.resizable(False, False)
+        popup.transient(self)
+        popup.configure(fg_color=BG_DARK)
+        popup.grid_columnconfigure(0, weight=1)
+        popup.grid_rowconfigure(1, weight=1)
+
+        view_month = [selected.replace(day=1)]
+
+        def close_popup():
+            try:
+                popup.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                popup.destroy()
+            except tk.TclError:
+                pass
+            self._calendar_popup = None
+
+        def choose_day(day_value: date):
+            self._date_var.set(day_value.isoformat())
+            close_popup()
+
+        header = ctk.CTkFrame(popup, fg_color=BG_CARD, corner_radius=0)
+        header.grid(row=0, column=0, sticky='ew')
+        header.grid_columnconfigure(1, weight=1)
+        month_label = ctk.CTkLabel(
+            header, text='', text_color=TEXT_PRI,
+            font=(ui_font(), 14, 'bold'))
+        ctk.CTkButton(
+            header, text='‹', width=44, height=40,
+            fg_color='transparent', hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 20, 'bold'),
+            command=lambda: shift_month(-1)).grid(
+                row=0, column=0, padx=(12, 4), pady=10)
+        month_label.grid(row=0, column=1, padx=4, pady=10)
+        ctk.CTkButton(
+            header, text='›', width=44, height=40,
+            fg_color='transparent', hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 20, 'bold'),
+            command=lambda: shift_month(1)).grid(
+                row=0, column=2, padx=(4, 12), pady=10)
+
+        grid = ctk.CTkFrame(
+            popup, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        grid.grid(row=1, column=0, padx=14, pady=14, sticky='nsew')
+        for column in range(7):
+            grid.grid_columnconfigure(column, weight=1)
+
+        def render_month():
+            for child in grid.winfo_children():
+                child.destroy()
+            current = view_month[0]
+            month_label.configure(text=f'{current.year} / {current.month:02d}')
+            weekdays = T('st_weekdays').split('|')
+            if len(weekdays) != 7:
+                weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            for column, weekday in enumerate(weekdays):
+                ctk.CTkLabel(
+                    grid, text=weekday, text_color=TEXT_DIM,
+                    font=(ui_font(), 9, 'bold')).grid(
+                        row=0, column=column, padx=2, pady=(10, 6))
+
+            weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
+                current.year, current.month)
+            for row, week in enumerate(weeks, start=1):
+                for column, day_number in enumerate(week):
+                    if day_number == 0:
+                        ctk.CTkLabel(grid, text='', width=38, height=34).grid(
+                            row=row, column=column, padx=2, pady=2)
+                        continue
+                    day_value = date(current.year, current.month, day_number)
+                    is_selected = day_value == selected
+                    is_today = day_value == today
+                    ctk.CTkButton(
+                        grid, text=str(day_number), width=38, height=34,
+                        corner_radius=9,
+                        fg_color=ACCENT if is_selected else 'transparent',
+                        hover_color=ACCENT_HOVER,
+                        text_color=WHITE if is_selected else TEXT_PRI,
+                        border_width=1 if is_today and not is_selected else 0,
+                        border_color=ACCENT,
+                        font=(ui_font(), 10, 'bold' if is_selected else 'normal'),
+                        command=lambda value=day_value: choose_day(value)).grid(
+                            row=row, column=column, padx=2, pady=2)
+
+        def shift_month(delta: int):
+            current = view_month[0]
+            month_index = current.year * 12 + current.month - 1 + delta
+            year, month_zero = divmod(month_index, 12)
+            view_month[0] = date(year, month_zero + 1, 1)
+            render_month()
+
+        footer = ctk.CTkFrame(popup, fg_color='transparent')
+        footer.grid(row=2, column=0, padx=14, pady=(0, 14), sticky='ew')
+        ctk.CTkButton(
+            footer, text=T('st_date_today'), height=36,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(ui_font(), 10, 'bold'),
+            command=lambda: choose_day(today)).pack(side='left', expand=True, fill='x')
+        ctk.CTkButton(
+            footer, text=T('st_calendar_cancel'), height=36,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(ui_font(), 10), command=close_popup).pack(
+                side='left', expand=True, fill='x', padx=(8, 0))
+
+        popup.protocol('WM_DELETE_WINDOW', close_popup)
+        render_month()
+        popup.update_idletasks()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - popup.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - popup.winfo_height()) // 3)
+        popup.geometry(f'+{x}+{y}')
+        popup.after(40, popup.grab_set)
+
     def _restore_target_checks(self, targets):
         for saved in targets:
             site_name = saved.get('site')
@@ -1573,6 +1847,19 @@ class SmallToolApp(ctk.CTk):
             save_config(self._cfg)
             self._log(T('st_folder_set', path=d))
 
+    def _prepare_output_folder(self) -> Optional[str]:
+        folder = self._folder_var.get().strip() or _default_output_folder()
+        self._folder_var.set(folder)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror(
+                T('st_folder_error'),
+                T('st_folder_error_msg', path=folder, error=str(exc)))
+            return None
+        self._cfg['output_folder'] = folder
+        return folder
+
     def _on_res_change(self, val):
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         pref = self._resolution_pref_from_label(val)
@@ -1581,9 +1868,8 @@ class SmallToolApp(ctk.CTk):
         save_config(self._cfg)
 
     def _start_worker(self):
-        folder = self._folder_var.get().strip()
+        folder = self._prepare_output_folder()
         if not folder:
-            messagebox.showwarning(T('st_no_folder'), T('st_no_folder_msg'))
             return
         targets = self._get_selected_targets()
         if not targets:
@@ -1628,9 +1914,8 @@ class SmallToolApp(ctk.CTk):
         if self._worker.is_running():
             self._log(T('st_scan_running'))
             return
-        folder = self._folder_var.get().strip()
+        folder = self._prepare_output_folder()
         if not folder:
-            messagebox.showwarning(T('st_no_folder'), T('st_no_folder_msg'))
             return
         targets = self._get_selected_targets()
         if not targets:
@@ -1639,6 +1924,7 @@ class SmallToolApp(ctk.CTk):
         date_str = self._validate_baseline_date()
         if not date_str:
             return
+        self._cfg['output_folder'] = folder
         if not self._save_selections_to_config(date_str):
             return
         self._check_now_btn.configure(state='disabled')

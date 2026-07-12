@@ -1,0 +1,35 @@
+import json
+
+import jable_smalltool
+
+
+def test_blank_saved_folder_falls_back_to_tmp_beside_app(monkeypatch, tmp_path):
+    app_dir = tmp_path / 'portable'
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    config_path = state_dir / 'config.json'
+    config_path.write_text(json.dumps({
+        'output_folder': '',
+        'selected_targets': [],
+    }), encoding='utf-8')
+
+    monkeypatch.setattr(jable_smalltool, 'APP_DIR', str(app_dir))
+    monkeypatch.setattr(jable_smalltool, 'STATE_DIR', str(state_dir))
+    monkeypatch.setattr(jable_smalltool, 'CONFIG_PATH', str(config_path))
+
+    cfg = jable_smalltool.load_config()
+
+    assert cfg['output_folder'] == str(app_dir / 'tmp')
+
+
+def test_missing_config_uses_tmp_beside_app(monkeypatch, tmp_path):
+    app_dir = tmp_path / 'portable'
+    state_dir = tmp_path / 'state'
+    monkeypatch.setattr(jable_smalltool, 'APP_DIR', str(app_dir))
+    monkeypatch.setattr(jable_smalltool, 'STATE_DIR', str(state_dir))
+    monkeypatch.setattr(
+        jable_smalltool, 'CONFIG_PATH', str(state_dir / 'missing.json'))
+
+    cfg = jable_smalltool.load_config()
+
+    assert cfg['output_folder'] == str(app_dir / 'tmp')
