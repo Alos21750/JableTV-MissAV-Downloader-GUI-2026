@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import platform
+import html
 import os
 import re
 import threading
@@ -34,6 +35,67 @@ class MirrorsBlockedError(Exception):
 
 request_headers = {'browser': 'firefox', 'platform': platform.system().lower()}
 default_max_workers = min(os.cpu_count() * 2, 16) if os.cpu_count() else 8
+
+_WINDOWS_FILENAME_TRANSLATION = str.maketrans({
+    '<': '＜', '>': '＞', ':': '：', '"': '＂',
+    '/': '／', '\\': '＼', '|': '｜', '?': '？', '*': '＊',
+})
+_WINDOWS_RESERVED_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    *(f'COM{i}' for i in range(1, 10)),
+    *(f'LPT{i}' for i in range(1, 10)),
+}
+
+
+def _sanitize_filename(value):
+    """Keep the source title readable while making it portable to Windows."""
+    name = html.unescape(str(value or ''))
+    name = re.sub(r'[\x00-\x1f\x7f]', ' ', name)
+    name = name.translate(_WINDOWS_FILENAME_TRANSLATION).strip()
+
+    trailing_dots = len(name) - len(name.rstrip('.'))
+    if trailing_dots:
+        name = name[:-trailing_dots] + '．' * trailing_dots
+
+    stem = name.split('.', 1)[0].upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        name = '_' + name
+    return name
+
+
+def _utf16_units(value):
+    return len(value.encode('utf-16-le')) // 2
+
+
+def _portable_filename_fits(dest_folder, target_name):
+    part_name = target_name + '.mp4.part'
+    full_path = os.path.join(dest_folder, part_name)
+    return (_utf16_units(full_path) <= 255 and
+            len(part_name.encode('utf-8')) <= 255)
+
+
+def _truncate_target_name(name, dest_folder, dirname):
+    """Cap both Windows path units and POSIX component bytes, keeping a UID."""
+    if _portable_filename_fits(dest_folder, name):
+        return name
+
+    uid = re.sub(r'[^\w]', '', dirname)[-8:] or 'video'
+    suffix = '_' + uid
+    if not _portable_filename_fits(dest_folder, suffix):
+        raise OSError('Destination path is too long for a portable filename')
+
+    best = suffix
+    low, high = 0, len(name)
+    while low <= high:
+        middle = (low + high) // 2
+        prefix = name[:middle].rstrip()
+        candidate = prefix + suffix if prefix else suffix
+        if _portable_filename_fits(dest_folder, candidate):
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 _session_lock = threading.Lock()
 _session = None
@@ -428,21 +490,15 @@ class M3U8Crawler:
             self.get_url_infos()
             if self.is_url_vaildate():
                 if self._targetName:
-                    self._targetName = re.sub(r'[^\w\-_\. ]', '', self._targetName)
+                    self._targetName = _sanitize_filename(self._targetName)
                     if len(self._dirName) > 80:
                         self._dirName = self._dirName[:80]
                         self._temp_folder = os.path.join(self._dest_folder, self._dirName)
                     if not self._targetName.strip():
-                        self._targetName = self._dirName
-                    LIMIT = 255
-                    reserve = len(self._dest_folder) + len(os.sep) + len('.mp4.part')
-                    max_len = LIMIT - reserve
-                    if max_len < 20:
-                        max_len = 20
-                    if len(self._targetName) > max_len:
-                        uid = re.sub(r'[^\w]', '', self._dirName)[-8:]
-                        keep = max(8, max_len - len(uid) - 1)
-                        self._targetName = (self._targetName[:keep].rstrip() + '_' + uid)[:max_len].rstrip()
+                        self._targetName = (_sanitize_filename(self._dirName)
+                                            or 'video')
+                    self._targetName = _truncate_target_name(
+                        self._targetName, self._dest_folder, self._dirName)
                 if not self.silence:
                     if self._targetName: print("檔案名稱: " + self._targetName, flush=True)
                     if self._dest_folder: print("儲存位置: " + self._dest_folder, flush=True)
