@@ -21,6 +21,7 @@ import urllib.request
 
 GRAPHQL_URL = 'https://api.github.com/graphql'
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / 'img' / 'star-history.svg'
+RENDER_VERSION = '2'
 
 QUERY = '''
 query StarHistory($owner: String!, $name: String!, $cursor: String) {
@@ -113,12 +114,20 @@ def nice_upper(value: int) -> int:
         return 4
     magnitude = 10 ** math.floor(math.log10(value))
     normalized = value / magnitude
-    step = 2 if normalized <= 2 else 5 if normalized <= 5 else 10
+    if normalized <= 2:
+        step = 2
+    elif normalized <= 2.5:
+        step = 2.5
+    elif normalized <= 5:
+        step = 5
+    else:
+        step = 10
     return int(step * magnitude)
 
 
 def history_hash(timestamps: list[str]) -> str:
-    return sha256('\n'.join(timestamps).encode()).hexdigest()[:20]
+    payload = RENDER_VERSION + '\n' + '\n'.join(timestamps)
+    return sha256(payload.encode()).hexdigest()[:20]
 
 
 def render_svg(repository: str, total: int, timestamps: list[str]) -> str:
