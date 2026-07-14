@@ -160,7 +160,7 @@ Docker 是無介面、執行完即結束的下載工作，不包含 Modern 或 S
   <img src="./img/star-history.svg" width="100%" alt="Verified GitHub star history for JableTV Downloader" />
 </p>
 
-圖表由本 repo 的 GitHub Actions 使用唯讀 repository token 取得目前 stargazers 的 `starredAt` 時間後產生；不請求或輸出帳號名稱。只有資料改變時才更新。曲線反映「目前仍按 Star 的帳號」之加入日期，已取消 Star 的帳號不在資料中。
+圖表由本 repo 的 GitHub Actions 使用唯讀 repository token 取得目前 stargazers 的 `starredAt` 時間後產生；不請求或輸出帳號名稱。只有資料或圖表格式改變時才更新。曲線反映「目前仍按 Star 的帳號」之加入日期，已取消 Star 的帳號不在資料中。
 
 <details>
 <summary>為什麼不再使用舊的 api.star-history.com 圖片？</summary>
