@@ -1,0 +1,38 @@
+name: update-star-history
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/star-history.yml'
+      - 'scripts/update_star_history.py'
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate chart from GitHub star timestamps
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/update_star_history.py
+
+      - name: Commit changed chart
+        run: |
+          git add img/star-history.svg
+          if git diff --cached --quiet; then
+            echo "Star history is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: refresh star history"
+          git push

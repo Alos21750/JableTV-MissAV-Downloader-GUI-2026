@@ -1,12 +1,22 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Automated screenshot capture for the Material-Design GUI (gui_modern)."""
+"""Capture the two current desktop UIs used by the GitHub READMEs.
+
+The script keeps the user's saved preferences and download queue untouched. The
+Modern screenshot uses a live JableTV browse page; the SmallTool screenshot is
+an idle configuration screen with two example category selections.
+"""
+
+from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
+import subprocess
 import sys
+import tempfile
+import time
 
-# Force DPI-unaware so screenshots capture at 1:1 logical pixels
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(0)
 except Exception:
@@ -17,141 +27,124 @@ sys.path.insert(0, os.path.dirname(__file__))
 from PIL import ImageGrab  # noqa: E402
 
 import customtkinter as ctk  # noqa: E402
+
 ctk.deactivate_automatic_dpi_awareness()
 ctk.set_widget_scaling(1.0)
 ctk.set_window_scaling(1.0)
 
-from gui_modern import DownloadItem, ModernApp  # noqa: E402
+import config  # noqa: E402
+import gui_modern  # noqa: E402
+import jable_smalltool  # noqa: E402
+from smalltool_categories import find_target, selection_key  # noqa: E402
+
 
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'img')
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 
 def capture_window(win, filename):
-    """Capture the app content area — maximized + topmost so nothing bleeds through."""
+    """Capture only the application window, with no desktop bleed-through."""
     filepath = os.path.join(SCREENSHOTS_DIR, filename)
     win.update_idletasks()
     win.attributes('-topmost', True)
     win.lift()
     win.focus_force()
     win.update()
-    # Let the window fully repaint after tab switch
-    import time
-    time.sleep(0.3)
+    time.sleep(0.5)
     win.update()
 
-    x = win.winfo_rootx()
-    y = win.winfo_rooty()
-    w = win.winfo_width()
-    h = win.winfo_height()
-
-    img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
-    img.save(filepath, optimize=True)
-    pw, ph = img.size
-    print(f'[screenshot] {filename}  {pw}x{ph}  ({os.path.getsize(filepath):,} B)')
+    rect = wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(win.winfo_id(), ctypes.byref(rect))
+    # A DPI-unaware Tk process reports logical coordinates while ImageGrab
+    # consumes physical pixels. Derive the scale from the active desktop so
+    # the capture includes the entire window on 125%/150% displays.
+    desktop_width, desktop_height = ImageGrab.grab().size
+    scale_x = desktop_width / win.winfo_screenwidth()
+    scale_y = desktop_height / win.winfo_screenheight()
+    image = ImageGrab.grab(bbox=(
+        round(rect.left * scale_x),
+        round(rect.top * scale_y),
+        round(rect.right * scale_x),
+        round(rect.bottom * scale_y),
+    ))
+    image.save(filepath, optimize=True)
+    print(f'[screenshot] {filename} {image.width}x{image.height}')
     win.attributes('-topmost', False)
 
 
-def populate_downloads(app: ModernApp):
-    """Fill the download manager with realistic demo items."""
-    demos = [
-        ('https://jable.tv/videos/ssis-001/', '下載中',
-         'SSIS-001 三上悠亞の極上テクニック', 67, '2.3 MB/s'),
-        ('https://jable.tv/videos/ipx-486/', '下載中',
-         'IPX-486 天然成分由来 美少女汁120%', 34, '1.8 MB/s'),
-        ('https://jable.tv/videos/stars-325/', '下載中',
-         'STARS-325 永野いち夏 完全覚醒', 89, '3.1 MB/s'),
-        ('https://jable.tv/videos/mide-953/', '下載中',
-         'MIDE-953 高橋しょう子が凄テクで', 12, '2.0 MB/s'),
-        ('https://jable.tv/videos/pred-309/', '下載中',
-         'PRED-309 篠田ゆうの絶頂4本番', 51, '1.5 MB/s'),
-        ('https://missav.ai/dm132/ja/sone-001', '等待中',
-         'SONE-001 新人NO.1 河北彩花', 0, ''),
-        ('https://missav.ws/dm132/ja/midv-139', '等待中',
-         'MIDV-139 田中ねねの豊満Jcup', 0, ''),
-        ('https://jable.tv/videos/cawd-301/', '等待中',
-         'CAWD-301 伊藤舞雪 最高の美女', 0, ''),
-        ('https://jable.tv/videos/ssni-756/', '已下載',
-         'SSNI-756 橋本ありなの最新作品', 100, ''),
-        ('https://jable.tv/videos/jul-679/', '已下載',
-         'JUL-679 Madonna専属 美人妻', 100, ''),
-    ]
-    for url, state, name, pct, speed in demos:
-        app._dlmgr.add_item(url, name=name, state=state)
-        item = app._dlmgr._items[url]   # direct access ok for demo data
-        item.name = name
-        item.state = state
-        item.progress = pct
-        item.speed = speed
+def prepare_window(app, width=1280, height=800):
+    app.overrideredirect(True)
+    app.geometry(f'{width}x{height}+0+0')
+    app.update_idletasks()
+
+
+def capture_modern():
+    config.get_ui_lang = lambda: 'en'
+    config.get_theme = lambda: 'dark'
+    config.get_proxy_url = lambda: ''
+    gui_modern.CSV_PATH = os.path.join(
+        tempfile.gettempdir(), 'jable_readme_empty_queue.csv')
+    try:
+        os.remove(gui_modern.CSV_PATH)
+    except FileNotFoundError:
+        pass
+
+    app = gui_modern.ModernApp(url='', dest='download')
+    prepare_window(app)
+    app._select_tab('browse')
+    app._site_var.set('JableTV')
+    app._on_site_change('JableTV')
+
+    def finish():
+        capture_window(app, 'readme_modern.png')
+        app._on_close()
+
+    app.after(9000, finish)
+    app.mainloop()
+
+
+def capture_smalltool():
+    config.get_ui_lang = lambda: 'zh'
+    config.get_theme = lambda: 'dark'
+    config.get_proxy_url = lambda: ''
+    jable_smalltool.load_config = lambda: {
+        'output_folder': r'.\tmp',
+        'baseline_date': jable_smalltool.DEFAULT_BASELINE_DATE,
+        'resolution': 'highest',
+        'version_preference': 'chinese-subtitle',
+        'first_run_done': False,
+        'selected_targets': [],
+    }
+    jable_smalltool.save_config = lambda _cfg: None
+
+    app = jable_smalltool.SmallToolApp()
+    prepare_window(app, width=1200, height=800)
+    tab_name = 'MissAV  102'
+    app._category_tabview.set(tab_name)
+    for name in ('亂倫', 'NTR'):
+        target = find_target('MissAV', legacy_name=name)
+        if target:
+            app._check_vars[selection_key('MissAV', target['id'])].set(True)
+    app._sync_select_all_vars()
+    capture_window(app, 'readme_smalltool.png')
+    app._on_close()
 
 
 def run():
-    app = ModernApp(url='', dest='download')
-    # True fullscreen — covers entire screen, no title bar, no other windows visible
-    app.overrideredirect(True)
-    screen_w = app.winfo_screenwidth()
-    screen_h = app.winfo_screenheight()
-    app.geometry(f'{screen_w}x{screen_h}+0+0')
-    app.update_idletasks()
-
-    step = [0]
-
-    def next_step():
-        s = step[0]
-        step[0] += 1
-
-        if s == 0:
-            # Browse - JableTV
-            app._tabs.set('瀏覽')
-            try:
-                app._site_var.set('JableTV')
-                app._on_site_change('JableTV')
-            except Exception as e:
-                print(f'[WARN] site switch: {e}')
-            app.after(7000, next_step)
-
-        elif s == 1:
-            capture_window(app, 'screenshot_browse_jable.png')
-            app.after(800, next_step)
-
-        elif s == 2:
-            # Browse - MissAV
-            try:
-                app._site_var.set('MissAV')
-                app._on_site_change('MissAV')
-            except Exception as e:
-                print(f'[WARN] site switch: {e}')
-            app.after(7000, next_step)
-
-        elif s == 3:
-            capture_window(app, 'screenshot_browse_missav.png')
-            app.after(800, next_step)
-
-        elif s == 4:
-            # Download tab
-            app._tabs.set('下載')
-            populate_downloads(app)
-            app.after(1800, next_step)
-
-        elif s == 5:
-            capture_window(app, 'screenshot_download.png')
-            app.after(800, next_step)
-
-        elif s == 6:
-            # Settings tab
-            app._tabs.set('設定')
-            app.after(1200, next_step)
-
-        elif s == 7:
-            capture_window(app, 'screenshot_settings.png')
-            app.after(600, next_step)
-
-        elif s == 8:
-            print('\n=== All screenshots captured ===')
-            app.after(1200, app.destroy)
-
-    app.after(3000, next_step)
-    app.mainloop()
+    if len(sys.argv) == 1:
+        for target in ('modern', 'smalltool'):
+            subprocess.run(
+                [sys.executable, os.path.abspath(__file__), target],
+                check=True)
+        print('README screenshots captured.')
+        return
+    if sys.argv[1] == 'modern':
+        capture_modern()
+        return
+    if sys.argv[1] == 'smalltool':
+        capture_smalltool()
+        return
+    raise SystemExit('usage: take_screenshots.py [modern|smalltool]')
 
 
 if __name__ == '__main__':

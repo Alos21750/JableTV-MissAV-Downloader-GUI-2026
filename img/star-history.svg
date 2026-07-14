@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-labelledby="title description">
+  <title id="title">Star history refresh pending</title>
+  <desc id="description">GitHub Actions will replace this placeholder with verified repository star timestamps.</desc>
+  <rect x="1" y="1" width="1198" height="478" rx="18" fill="#0d1117" stroke="#30363d"/>
+  <text x="600" y="218" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="28" font-weight="700" text-anchor="middle">Star history refresh pending</text>
+  <text x="600" y="258" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="16" text-anchor="middle">The repository workflow will replace this with verified GitHub data.</text>
+</svg>
