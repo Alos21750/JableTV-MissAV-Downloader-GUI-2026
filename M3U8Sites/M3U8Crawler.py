@@ -153,7 +153,9 @@ def fetch_with_mirrors(scraper, url, site_key, validate, timeout=15, headers_fac
             r = None
             for attempt in range(2):                  # 1 retry on transport error only
                 try:
-                    r = scraper.get(target, timeout=timeout, headers=hdrs or {}, cookies=cookies)
+                    r = scraper.get(
+                        target, timeout=timeout, headers=hdrs or {}, cookies=cookies,
+                        **config.proxy_request_kwargs())
                     break
                 except Exception:
                     r = None
@@ -435,10 +437,14 @@ def _http_get(url, headers=None, timeout=20):
                 k: v for k, v in dict(headers or {}).items()
                 if str(k).lower() != 'user-agent'
             }
-            return _get_cffi_session().get(url, headers=cffi_headers, timeout=timeout)
+            return _get_cffi_session().get(
+                url, headers=cffi_headers, timeout=timeout,
+                **config.proxy_request_kwargs())
         except Exception:
             pass
-    return _get_session().get(url, headers=dict(headers or {}), timeout=timeout)
+    return _get_session().get(
+        url, headers=dict(headers or {}), timeout=timeout,
+        **config.proxy_request_kwargs())
 
 
 class M3U8Crawler:

@@ -40,7 +40,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.28'
+APP_VERSION = '2.5.29'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -458,7 +458,8 @@ def _fetch_thumbnail(url: str) -> Optional[Image.Image]:
     if cached is not None:
         return cached
     try:
-        r = _get_thumb_session().get(url, headers=headers, timeout=12)
+        r = _get_thumb_session().get(
+            url, headers=headers, timeout=12, **config.proxy_request_kwargs())
         if r.status_code != 200:
             return None
         img = Image.open(io.BytesIO(r.content)).convert('RGB')
@@ -1614,6 +1615,57 @@ class ModernApp(ctk.CTk):
                      text_color=TEXT_DIM,
                      font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 22))
 
+        # App-scoped network proxy
+        proxy = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+                             border_width=1, border_color=BORDER_CARD)
+        proxy.pack(fill='x', pady=(0, 16))
+
+        proxy_hdr = ctk.CTkFrame(proxy, fg_color='transparent')
+        proxy_hdr.pack(fill='x', padx=20, pady=(16, 4))
+        ctk.CTkLabel(proxy_hdr, text=T('proxy_card_title'),
+                     font=(ui_font(), 15, 'bold'),
+                     text_color=TEXT_PRI).pack(side='left')
+        ctk.CTkLabel(proxy, text=T('proxy_card_desc'),
+                     text_color=TEXT_DIM,
+                     font=(ui_font(), 10)).pack(anchor='w', padx=20, pady=(0, 12))
+
+        ctk.CTkFrame(proxy, height=1, fg_color=BORDER).pack(fill='x', padx=20)
+
+        self._proxy_var = ctk.StringVar(value=config.get_proxy_url())
+        row_proxy = ctk.CTkFrame(proxy, fg_color='transparent')
+        row_proxy.pack(fill='x', padx=20, pady=(16, 2))
+        ctk.CTkLabel(row_proxy, text=T('proxy_url_label'), text_color=TEXT_PRI,
+                     font=(ui_font(), 12, 'bold'), width=116,
+                     anchor='w').pack(side='left')
+        ctk.CTkEntry(
+            row_proxy, textvariable=self._proxy_var,
+            placeholder_text=T('proxy_url_placeholder'),
+            height=34, corner_radius=8,
+            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI).pack(side='left', fill='x', expand=True, padx=10)
+
+        proxy_actions = ctk.CTkFrame(proxy, fg_color='transparent')
+        proxy_actions.pack(fill='x', padx=20, pady=(10, 2))
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_save'), width=70, height=34,
+            corner_radius=8, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color=WHITE, command=self._on_proxy_save).pack(
+                side='left', padx=(126, 6))
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_clear'), width=70, height=34,
+            corner_radius=8, fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, command=self._on_proxy_clear).pack(side='left')
+        self._proxy_status_lbl = ctk.CTkLabel(
+            proxy_actions, text='', text_color=TEXT_SEC, font=(ui_font(), 10))
+        self._proxy_status_lbl.pack(side='left', padx=12)
+        self._refresh_proxy_status()
+
+        ctk.CTkLabel(proxy, text=T('proxy_help'),
+                     text_color=TEXT_DIM, font=(ui_font(), 9),
+                     wraplength=720, justify='left').pack(
+                         anchor='w', padx=20, pady=(6, 18))
+
         # Cloudflare bypass
         cf = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
                           border_width=1, border_color=BORDER_CARD)
@@ -2422,6 +2474,34 @@ class ModernApp(ctk.CTk):
         ov = config.get_cf_override(host) or {}
         self._cf_cookie_var.set(ov.get('cookie', ''))
         self._cf_ua_var.set(ov.get('ua', ''))
+
+    def _refresh_proxy_status(self, saved=False):
+        enabled = bool(config.get_proxy_url())
+        text = T('proxy_enabled') if enabled else T('proxy_disabled')
+        if saved:
+            text = f"{T('proxy_saved')} · {text}"
+        self._proxy_status_lbl.configure(
+            text=text, text_color=SUCCESS if enabled else TEXT_DIM)
+
+    def _on_proxy_save(self):
+        try:
+            value = config.set_proxy_url(self._proxy_var.get())
+        except (OSError, ValueError):
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
+        self._proxy_var.set(value)
+        self._refresh_proxy_status(saved=True)
+
+    def _on_proxy_clear(self):
+        try:
+            config.set_proxy_url('')
+        except OSError:
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
+        self._proxy_var.set('')
+        self._refresh_proxy_status()
 
     def _on_cf_save(self):
         host = self._cf_host_var.get()

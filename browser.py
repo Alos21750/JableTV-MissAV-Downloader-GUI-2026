@@ -8,6 +8,7 @@ import tkinter.ttk as ttk
 import requests
 from PIL import ImageTk, Image
 from config import headers
+import config
 from ssl_util import SharedSSLAdapter
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
@@ -671,7 +672,8 @@ class BrowsePanel(tk.Frame):
 
     def _load_thumb(self, url, card, target_w=300):
         try:
-            r = _get_thumb_session().get(url, headers=headers, timeout=20)
+            r = _get_thumb_session().get(
+                url, headers=headers, timeout=20, **config.proxy_request_kwargs())
             if r.status_code != 200:
                 return
             img = Image.open(io.BytesIO(r.content))

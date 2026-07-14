@@ -5,12 +5,14 @@ import re
 import cloudscraper
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+import config
 
 
 class SiteCCCDNXYZ(M3U8Crawler):
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+            self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")
         result = re.search('meta name="keywords" content=.+"', htmlfile.text)

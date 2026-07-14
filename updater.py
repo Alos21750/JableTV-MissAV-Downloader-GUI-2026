@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 import requests
+import config
 
 
 REPO = "Alos21750/JableTV-MissAV-Downloader-GUI-2026"
@@ -58,7 +59,9 @@ def check_latest(timeout=10):
     }
     try:
         with _session() as s:
-            r = s.get(API_LATEST, headers=headers, timeout=timeout)
+            r = s.get(
+                API_LATEST, headers=headers, timeout=timeout,
+                **config.proxy_request_kwargs())
         if r.status_code != 200:
             return None
         data = r.json()
@@ -105,7 +108,9 @@ def download_asset(url, dest_path, progress_cb=None, timeout=60):
     part_path = dest_path + '.part'
     _remove_quiet(part_path)
     try:
-        with _session() as s, s.get(url, stream=True, timeout=timeout) as r:
+        with _session() as s, s.get(
+                url, stream=True, timeout=timeout,
+                **config.proxy_request_kwargs()) as r:
             if r.status_code != 200:
                 return False
             total = int(r.headers.get('content-length') or 0)

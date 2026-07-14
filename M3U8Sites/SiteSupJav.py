@@ -19,6 +19,7 @@ from M3U8Sites.M3U8Crawler import _get_session
 from M3U8Sites.SiteMissAV import _unpack_js_eval
 from bs4 import BeautifulSoup
 import site_i18n
+import config
 
 
 SUPREMEJAV = 'https://lk1.supremejav.com/supjav.php?c={}'
@@ -220,6 +221,7 @@ class SiteSupJav(M3U8Crawler):
                         headers={'Referer': 'https://supjav.com/'},
                         timeout=25,
                         allow_redirects=True,
+                        **config.proxy_request_kwargs(),
                     )
                     m3u8url = _extract_packed_m3u8(fst.text)
                     if m3u8url:
@@ -241,7 +243,8 @@ class SiteSupJav(M3U8Crawler):
                 try:
                     emb = scraper.get(SUPREMEJAV.format(servers['ST'][::-1]),
                                       headers={'Referer': 'https://supjav.com/'},
-                                      timeout=25, allow_redirects=True)
+                                      timeout=25, allow_redirects=True,
+                                      **config.proxy_request_kwargs())
                     direct = _streamtape_direct_url(emb.text)
                     if direct:
                         self._direct_url = direct
@@ -255,7 +258,8 @@ class SiteSupJav(M3U8Crawler):
             if not m3u8url and not self._direct_url and 'TV' in servers:
                 try:
                     r2 = scraper.get(SUPREMEJAV.format(servers['TV'][::-1]),
-                                     headers={'Referer': 'https://supjav.com/'}, timeout=20)
+                                     headers={'Referer': 'https://supjav.com/'}, timeout=20,
+                                     **config.proxy_request_kwargs())
                     if getattr(r2, 'status_code', 0) in (403, 429, 503):
                         raise MirrorsBlockedError(_BLOCKED_MSG)
                     m3u8url = _extract_m3u8(r2.text)
@@ -363,6 +367,7 @@ class SiteSupJav(M3U8Crawler):
                 timeout=60,
                 stream=True,
                 allow_redirects=True,
+                **config.proxy_request_kwargs(),
             )
             info = _content_range(getattr(probe, 'headers', {}).get('content-range'))
             if getattr(probe, 'status_code', 0) != 206 or not info or info[:2] != (0, 0):
@@ -404,6 +409,7 @@ class SiteSupJav(M3U8Crawler):
                         timeout=60,
                         stream=True,
                         allow_redirects=True,
+                        **config.proxy_request_kwargs(),
                     )
                     response_range = _content_range(
                         getattr(response, 'headers', {}).get('content-range'))
@@ -495,6 +501,7 @@ class SiteSupJav(M3U8Crawler):
                     timeout=60,
                     stream=True,
                     allow_redirects=True,
+                    **config.proxy_request_kwargs(),
                 )
                 status = getattr(resp, 'status_code', 0)
                 response_range = _content_range(

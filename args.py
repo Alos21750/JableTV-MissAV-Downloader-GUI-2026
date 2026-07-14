@@ -1,8 +1,9 @@
 import argparse
 from bs4 import BeautifulSoup
 import random
-from urllib.request import Request, urlopen
-from config import headers
+import requests
+import config
+from ssl_util import SharedSSLAdapter
 import re
 
 
@@ -23,9 +24,14 @@ def get_parser():
 def av_recommand():
     headers = {'User-Agent': 'Mozilla/5.0'}
     url = 'https://jable.tv/'
-    request = Request(url, headers=headers)
     try:
-        web_content = urlopen(request, timeout=15).read()  # timeout: never hang forever
+        with requests.Session() as session:
+            session.mount('https://', SharedSSLAdapter())
+            response = session.get(
+                url, headers=headers, timeout=15,
+                **config.proxy_request_kwargs())
+            response.raise_for_status()
+            web_content = response.content
     except Exception:
         return None
     # 得到繞過轉址後的 html

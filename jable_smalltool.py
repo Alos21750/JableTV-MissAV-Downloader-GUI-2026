@@ -103,7 +103,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.28'
+APP_VERSION = '2.5.29'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -1394,8 +1394,43 @@ class SmallToolApp(ctk.CTk):
             font=(font_family, 11), command=self._pick_folder).grid(
                 row=0, column=2, padx=(8, 16), pady=(14, 8))
 
+        ctk.CTkLabel(
+            cfg_card, text=T('proxy_url_label'), text_color=TEXT_SEC,
+            font=(font_family, 11, 'bold'), width=98, anchor='w').grid(
+                row=1, column=0, padx=(16, 8), pady=(2, 2), sticky='w')
+        self._proxy_var = tk.StringVar(value=config.get_proxy_url())
+        ctk.CTkEntry(
+            cfg_card, textvariable=self._proxy_var,
+            placeholder_text=T('proxy_url_placeholder'), height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=(font_family, 10)).grid(
+                row=1, column=1, padx=8, pady=(2, 2), sticky='ew')
+        proxy_actions = ctk.CTkFrame(cfg_card, fg_color='transparent')
+        proxy_actions.grid(row=1, column=2, padx=(8, 16), pady=(2, 2))
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_save'), width=62, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(font_family, 9, 'bold'), command=self._on_proxy_save).pack(
+                side='left')
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_clear'), width=62, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(font_family, 9), command=self._on_proxy_clear).pack(
+                side='left', padx=(6, 0))
+
+        self._proxy_status_lbl = ctk.CTkLabel(
+            cfg_card, text='', text_color=TEXT_DIM,
+            font=(font_family, 9), anchor='w')
+        self._proxy_status_lbl.grid(
+            row=2, column=1, columnspan=2, padx=8, pady=(0, 4), sticky='w')
+        self._refresh_proxy_status()
+
         options = ctk.CTkFrame(cfg_card, fg_color='transparent')
-        options.grid(row=1, column=0, columnspan=3, padx=16, pady=(2, 14), sticky='ew')
+        options.grid(row=3, column=0, columnspan=3, padx=16, pady=(2, 14), sticky='ew')
 
         date_group = ctk.CTkFrame(options, fg_color='transparent')
         date_group.pack(side='left', fill='x', expand=True)
@@ -2007,6 +2042,34 @@ class SmallToolApp(ctk.CTk):
             return None
         self._cfg['output_folder'] = folder
         return folder
+
+    def _refresh_proxy_status(self, saved=False):
+        enabled = bool(config.get_proxy_url())
+        text = T('proxy_enabled') if enabled else T('proxy_disabled')
+        if saved:
+            text = f"{T('proxy_saved')} · {text}"
+        self._proxy_status_lbl.configure(
+            text=text, text_color=SUCCESS if enabled else TEXT_DIM)
+
+    def _on_proxy_save(self):
+        try:
+            value = config.set_proxy_url(self._proxy_var.get())
+        except (OSError, ValueError):
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
+        self._proxy_var.set(value)
+        self._refresh_proxy_status(saved=True)
+
+    def _on_proxy_clear(self):
+        try:
+            config.set_proxy_url('')
+        except OSError:
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
+        self._proxy_var.set('')
+        self._refresh_proxy_status()
 
     def _on_res_change(self, val):
         from M3U8Sites.M3U8Crawler import set_resolution_pref

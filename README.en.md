@@ -119,6 +119,7 @@ This project ships two independent executables:
 - **Resume Support** — Cancelled downloads can be restarted; completed segments are preserved
 - **High DPI Support** — Automatically adapts to high-resolution displays for crisp UI
 - **Settings Tab** — Configure download speed, save location, concurrency, and video quality
+- **App-scoped proxy** — Modern and SmallTool share an HTTP/HTTPS/SOCKS proxy without changing the Windows global proxy; site pages, thumbnails, playlists, segments, and SupJav direct downloads all use it
 - **Portable Windows Build** — Pre-packaged `.exe`, no Python installation needed
 
 ## Features (Jable_smalltool.exe)
@@ -212,12 +213,13 @@ Env vars: `RESOLUTION` (highest / 1080 / 720 / 480), `URLS_FILE`, `DOWNLOAD_DIR`
 1. **Browse Tab** — Pick a site & category, browse thumbnails with pagination, select videos, click "Download Selected"
 2. **Download Tab** — Paste video URLs or import from file, click "Download All"
 3. **Queue Management** — Active downloads show progress; pending items auto-start
-4. **Settings Tab** — Configure speed limit, save location, video quality
+4. **Settings Tab** — Configure speed, save location, quality, and an optional proxy such as `127.0.0.1:7890` or a full HTTP/SOCKS URL
 5. **Open Folder** — Click the folder button to view downloaded videos
 6. **Cancel / Cancel All** — Stop any or all downloads at any time
 
 ## Changelog
 
+- **v2.5.29** — Added an app-scoped proxy setting (#32) shared by Modern and SmallTool. HTTP, HTTPS, SOCKS4, and SOCKS5 are supported across site parsing, thumbnails, m3u8 playlists, AES keys, video segments, SupJav direct MP4 downloads, and app updates. It applies immediately and does not change the Windows global proxy.
 - **v2.5.9** — Fixed MissAV resolution selection (#21): added 1080p/720p/480p/360p target options, kept Highest/Lowest behavior for bandwidth-only manifests, and saved the modern GUI resolution setting across sessions.
 - **v2.5.8** — Fixed `HTTP 403 Forbidden` on MissAV downloads (#20): MissAV's video CDN (surrit.com) is now behind Cloudflare, so fetching the m3u8 playlist / video segments over Python's built-in HTTP stack was blocked (browsing thumbnails worked, but starting a download returned 403). The download layer (m3u8 playlist, AES key, TS segments, thumbnail) now uses the same curl_cffi (Chrome TLS fingerprint) connection as the page browser, and shows a clear "use a VPN/WARP" message when Cloudflare blocks the CDN. JableTV/SupJav downloads are unaffected.
 - **v2.5.7** — Fixed the large-queue startup freeze (#19); the download list now caps visible rows and loads/saves a bounded resumable queue; Settings now includes a saved-queue card to locate or clear `%APPDATA%\JableTV Downloader\download_queue.csv`.

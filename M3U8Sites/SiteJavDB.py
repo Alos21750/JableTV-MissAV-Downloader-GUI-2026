@@ -5,13 +5,15 @@ import re
 import cloudscraper
 from M3U8Sites.M3U8Crawler import *
 from bs4 import BeautifulSoup
+import config
 
 class SiteJavdbLive(M3U8Crawler):
     website_pattern = r'https://www\.javdb\.live/\d+\.html'
     website_dirname_pattern = r'https://www\.javdb\.live/(\d+)\.html$'
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+            self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")
         result = re.search('meta name="keywords" content=.+"', htmlfile.text)
@@ -68,7 +70,8 @@ class SiteMIEN321(M3U8Crawler):
     website_dirname_pattern = r'https://www\.mien321\.cc/index\.php/vodplay/(.+)\.html$'
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+            self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")
         soup = BeautifulSoup(htmlfile.content, 'html.parser')
@@ -76,7 +79,8 @@ class SiteMIEN321(M3U8Crawler):
         result = re.search(r',"url":".+,"url_next', htmlfile.text)
         if result:
             url_addon = 'https://www.mien321.cc/addons/dplayer/?url=' + result[0].split('"')[3]
-            htmlfile_addon = cloudscraper.create_scraper(browser=request_headers, delay=10).get(url_addon)
+            htmlfile_addon = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+                url_addon, **config.proxy_request_kwargs())
             if htmlfile_addon.status_code == 200:
                 result = re.search(r'https://.+\.m3u8', htmlfile_addon.text, flags=re.I)
                 if result:
@@ -89,7 +93,8 @@ class SiteAApp11(M3U8Crawler):
     website_dirname_pattern = r'https://www\.aapp11\.life/index\.php/vod/play/id/(\d+)/.+\.html$'
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+            self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")
         soup = BeautifulSoup(htmlfile.content, 'html.parser')
@@ -99,7 +104,8 @@ class SiteAApp11(M3U8Crawler):
             encode_str = result[0].split('"')[2]
             encode_str = re.sub(r'%', '', encode_str)
             url_addon = 'https://www.aapp11.life/addons/dplayer/?url=' + bytes.fromhex(encode_str).decode('ascii')
-            htmlfile_addon = cloudscraper.create_scraper(browser=request_headers, delay=10).get(url_addon)
+            htmlfile_addon = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+                url_addon, **config.proxy_request_kwargs())
             if htmlfile_addon.status_code == 200:
                 result = re.search(r'https://.+\.m3u8', htmlfile_addon.text, flags=re.I)
                 if result:
@@ -112,7 +118,8 @@ class SiteSeselah(M3U8Crawler):
     website_dirname_pattern = r'https://www\.seselah\.com/v/(\d+)/.+'
 
     def get_url_infos(self):
-        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(self._url)
+        htmlfile = cloudscraper.create_scraper(browser=request_headers, delay=10).get(
+            self._url, **config.proxy_request_kwargs())
         if htmlfile.status_code != 200:
             raise Exception(f"Bad url names: {self._url}")
         result = re.search(r'og:title".+">', htmlfile.text)
@@ -134,7 +141,9 @@ class SiteXJISHI(M3U8Crawler):
     def get_url_infos(self):
         url_addon = 'https://forum.xjishi.site/sixvideo/video/relatePage?id=' + self._dirName
         scraper = cloudscraper.create_scraper()
-        htmlfile_addon = scraper.post(url_addon, json={'id': self._dirName}, headers=request_headers)
+        htmlfile_addon = scraper.post(
+            url_addon, json={'id': self._dirName}, headers=request_headers,
+            **config.proxy_request_kwargs())
         if htmlfile_addon.status_code == 200:
             content = re.search(r'"main":\{"id":.+\}', htmlfile_addon.text)
             if content:

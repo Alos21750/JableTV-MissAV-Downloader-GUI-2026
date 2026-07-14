@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+from urllib.parse import urlsplit
 
 
 headers = {
@@ -16,8 +17,14 @@ MIRRORS = {
 
 _cf_lock = threading.Lock()
 _prefs_lock = threading.Lock()
+_proxy_lock = threading.Lock()
+_PROXY_UNSET = object()
+_proxy_url_cache = _PROXY_UNSET
 CF_OVERRIDES = {}
 VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
+VALID_PROXY_SCHEMES = {
+    'http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h',
+}
 
 
 def _cf_store_path():
@@ -122,6 +129,65 @@ def set_resolution_pref(pref):
             _save_prefs(prefs)
     except Exception:
         pass
+
+
+def normalize_proxy_url(raw):
+    """Validate one app-scoped proxy URL; bare host:port means HTTP."""
+    value = str(raw or '').strip()
+    if not value:
+        return ''
+    if re.search(r'[\x00-\x20\x7f]', value):
+        raise ValueError('Proxy URL cannot contain whitespace or control characters')
+    if '://' not in value:
+        value = 'http://' + value
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        parsed.port  # force validation of malformed/out-of-range ports
+    except (TypeError, ValueError):
+        raise ValueError('Invalid proxy URL') from None
+    if scheme not in VALID_PROXY_SCHEMES or not hostname:
+        raise ValueError('Unsupported or incomplete proxy URL')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('Proxy URL must not contain a path, query, or fragment')
+    return value
+
+
+def get_proxy_url():
+    global _proxy_url_cache
+    if _proxy_url_cache is _PROXY_UNSET:
+        with _proxy_lock:
+            if _proxy_url_cache is _PROXY_UNSET:
+                try:
+                    value = normalize_proxy_url(_load_prefs().get('proxy_url'))
+                except ValueError:
+                    value = ''
+                _proxy_url_cache = value
+    return _proxy_url_cache
+
+
+def set_proxy_url(raw):
+    global _proxy_url_cache
+    value = normalize_proxy_url(raw)
+    with _prefs_lock:
+        prefs = _load_prefs()
+        if value:
+            prefs['proxy_url'] = value
+        else:
+            prefs.pop('proxy_url', None)
+        _save_prefs(prefs)
+    with _proxy_lock:
+        _proxy_url_cache = value
+    return value
+
+
+def proxy_request_kwargs():
+    """Keyword arguments accepted by requests and curl_cffi requests."""
+    value = get_proxy_url()
+    if not value:
+        return {}
+    return {'proxies': {'http': value, 'https': value}}
 
 
 def _parse_cf_clearance(raw):
