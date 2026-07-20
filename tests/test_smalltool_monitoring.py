@@ -161,6 +161,49 @@ def test_worker_defaults_to_chinese_subtitle_for_duplicate_missav_code(
     assert any('[DEDUP] hone-297' in line for line in logs)
 
 
+def test_chinese_preference_scans_missav_genre_filter_before_fallback(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(jable_smalltool, 'load_seen', lambda: {})
+    monkeypatch.setattr(jable_smalltool, 'save_seen', lambda _seen: None)
+    monkeypatch.setattr(jable_smalltool, 'save_config', lambda _cfg: None)
+    monkeypatch.setattr(jable_smalltool, 'PER_VIDEO_FETCH_DELAY_SEC', 0)
+    monkeypatch.setattr(jable_smalltool, 'MAX_SCAN_PAGES', 1)
+
+    worker = jable_smalltool.SmallToolWorker(lambda _line: None)
+    fetch_calls = []
+
+    def fake_fetch(_site, url):
+        fetch_calls.append(url)
+        suffix = ('-chinese-subtitle'
+                  if 'filters=chinese-subtitle' in url else '')
+        return [{
+            'url': f'https://missav.ai/hone-297{suffix}',
+            'title': 'HONE-297',
+        }]
+
+    worker._fetch_page_for_site = fake_fetch
+    worker._fetch_missav_video_date = lambda _url: (
+        datetime(2026, 7, 11, tzinfo=timezone.utc), '2026-07-11')
+    downloaded = []
+    worker._download_one = lambda video, _dest: downloaded.append(video)
+    target = find_target('MissAV', None, '亂倫')
+    cfg = {
+        'output_folder': str(tmp_path),
+        'baseline_date': '2026-04-11',
+        'version_preference': 'chinese-subtitle',
+        'first_run_done': False,
+        'selected_targets': [{
+            'site': 'MissAV', 'id': target['id'], 'category': target['name'],
+        }],
+    }
+
+    assert worker._scan_and_download(cfg) is True
+    assert 'filters=chinese-subtitle' in fetch_calls[0]
+    assert any('filters=chinese-subtitle' not in url for url in fetch_calls)
+    assert [video['url'] for video in downloaded] == [
+        'https://missav.ai/hone-297-chinese-subtitle']
+
+
 def test_changed_preference_reconsiders_version_skipped_by_dedup(
         monkeypatch, tmp_path):
     subtitle_url = 'https://missav.ai/mimk-284-chinese-subtitle'

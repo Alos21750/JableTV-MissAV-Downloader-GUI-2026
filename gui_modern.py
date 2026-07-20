@@ -40,7 +40,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.29'
+APP_VERSION = '2.5.30'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -563,18 +563,23 @@ class ModernApp(ctk.CTk):
         self._build_ui()
         self.bind('<Configure>', self._on_root_resize, add='+')
         self.protocol('WM_DELETE_WINDOW', self._on_close)
-        self._start_update_check(manual=False)
-
         # Start periodic refresh for downloads
         self._refresh_downloads()
         # Start clipboard monitor (main-thread safe)
         self._clp_text = ''
         self._clipboard_poll()
 
-        # Load initial categories in background
-        self._load_categories()
+        # Tk rejects worker-thread ``after`` calls before mainloop starts.  Defer
+        # every worker that can complete quickly until the event loop is active.
+        self.after_idle(self._start_initial_background_tasks)
         if self._needs_lang_prompt:
             self.after(250, self._first_run_language_prompt)
+
+    def _start_initial_background_tasks(self):
+        if self._is_closing:
+            return
+        self._start_update_check(manual=False)
+        self._load_categories()
 
     def _ask_language_first_run(self):
         popup = None

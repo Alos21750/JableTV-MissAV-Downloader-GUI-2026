@@ -1,5 +1,6 @@
 import sys
 import types
+from urllib.parse import unquote
 
 
 def _stub_runtime_dependency(name, factory=None):
@@ -49,6 +50,13 @@ def test_target_ids_are_unique_and_legacy_names_still_resolve():
     assert old['id'] == 'category:chinese-subtitle'
     assert selection_key('JableTV', old['id']) == (
         'JableTV|category:chinese-subtitle')
+
+    incest = find_target('MissAV', legacy_name='亂倫')
+    assert '/genres/乱伦' in unquote(incest['url'])
+    assert '/genres/亂倫' not in unquote(incest['url'])
+
+    exclusive = find_target('MissAV', legacy_name='獨家')
+    assert '/genres/独家' in unquote(exclusive['url'])
 
 
 def test_smalltool_uses_site_specific_pagination_and_supjav_dates():

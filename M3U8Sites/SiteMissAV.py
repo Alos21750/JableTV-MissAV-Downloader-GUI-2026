@@ -168,6 +168,8 @@ class MissAVBrowser:
     @classmethod
     def fetch_page(cls, url):
         def _validate(resp):
+            if getattr(resp, 'status_code', 0) != 200:
+                return False
             s = BeautifulSoup(resp.content, 'html.parser')
             return bool(s.select('div.thumbnail') or s.select('div.group, article.video-item, div[class*="grid"] > div'))
         resp, host, reason = fetch_with_mirrors(cls._get_scraper(), url, 'missav', _validate)

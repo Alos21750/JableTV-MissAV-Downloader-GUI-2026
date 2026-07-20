@@ -105,9 +105,28 @@ _MISSAV_GENRE_ROWS = [
     ('手淫', 95), ('姐姐', 794), ('羞辱', 162),
 ]
 
+# MissAV displays Traditional Chinese in the default UI, but most taxonomy
+# route slugs are stored in Simplified Chinese.  Keep stable Traditional labels
+# for saved SmallTool selections while using the live route spelling.
+_MISSAV_TAXONOMY_SLUGS = {
+    '獨家': '独家',
+    '單體作品': '单体作品',
+    '多人運動': '多人运动',
+    '騎乘': '骑乘',
+    '4小時以上': '4小时以上',
+    '苗條': '苗条',
+    '戀物癖': '恋物癖',
+    '企劃': '企划',
+    '亂倫': '乱伦',
+    '搭訕': '搭讪',
+    '顏射': '颜射',
+    '淫亂': '淫乱',
+    '劇情': '剧情',
+}
+
 
 def _missav_taxonomy_target(kind, name, dm_id):
-    encoded = quote(name, safe='')
+    encoded = quote(_MISSAV_TAXONOMY_SLUGS.get(name, name), safe='')
     prefix = f'/dm{dm_id}' if dm_id is not None else ''
     return _target(
         f'{kind}:{name.casefold()}',

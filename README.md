@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.29 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.30 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## 先選一個工具
@@ -66,7 +66,7 @@
 ## SmallTool：依分類自動追新
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.29 Traditional Chinese dark interface showing MissAV categories, date, quality and version priority" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.30 Traditional Chinese dark interface showing MissAV categories, date, quality and version priority" />
 </p>
 
 1. 選擇儲存位置；若不選，會在執行檔旁自動建立 `tmp`。

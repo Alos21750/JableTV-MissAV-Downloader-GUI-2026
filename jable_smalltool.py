@@ -103,7 +103,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.29'
+APP_VERSION = '2.5.30'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -217,6 +217,21 @@ def _normalize_version_pref(cfg: dict) -> str:
     value = cfg.get(
         'version_preference', cfg.get('missav_version_preference'))
     return normalize_version_preference(value)
+
+
+def _targets_for_scan(targets: list[dict], version_preference: str) -> list[dict]:
+    """Add MissAV's category×subtitle view before the normal fallback view."""
+    expanded = []
+    for target in targets:
+        target_id = str(target.get('id') or '')
+        if (target.get('site') == 'MissAV' and
+                version_preference == 'chinese-subtitle' and
+                target_id.startswith(('genres:', 'makers:', 'provider:'))):
+            preferred = dict(target)
+            preferred['_missav_filter'] = 'chinese-subtitle'
+            expanded.append(preferred)
+        expanded.append(target)
+    return expanded
 
 # ── Persistence ──────────────────────────────────────────────────────
 def _ensure_state_dir() -> None:
@@ -631,7 +646,7 @@ class SmallToolWorker:
         scan_blocked = False
         scan_had_success = False
 
-        for target in targets:
+        for target in _targets_for_scan(targets, version_preference):
             if self._stop.is_set():
                 return False
             site_name = target['site']
@@ -649,6 +664,11 @@ class SmallToolWorker:
             self._log(f'── {site_name} / {cat_name} ──')
 
             base_url = self._category_fetch_url(site_name, cat_name, cat_url)
+            preferred_filter = target.get('_missav_filter')
+            if preferred_filter:
+                sep = '&' if '?' in base_url else '?'
+                base_url = f'{base_url}{sep}filters={preferred_filter}'
+                cat_name = f'{cat_name} · {T("st_pref_chinese")}'
             if site_name == 'JableTV' and 'sort_by=' not in base_url:
                 sep = '&' if '?' in base_url else '?'
                 base_url = f'{base_url}{sep}sort_by=post_date'
