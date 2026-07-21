@@ -67,6 +67,11 @@ from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import fetch_with_mirrors, MirrorsBlockedError
 import config
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES
+from subtitle_engine import (
+    SubtitleCancelled,
+    generate_subtitles,
+    normalize_subtitle_mode,
+)
 from smalltool_categories import (
     SITES,
     find_target,
@@ -103,7 +108,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.30'
+APP_VERSION = '2.5.31'
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -260,6 +265,8 @@ def load_config() -> dict:
                 if not str(cfg.get('output_folder') or '').strip():
                     cfg['output_folder'] = _default_output_folder()
                 cfg['version_preference'] = _normalize_version_pref(cfg)
+                cfg['subtitle_mode'] = normalize_subtitle_mode(
+                    cfg.get('subtitle_mode'))
                 cfg.pop('missav_version_preference', None)
                 return cfg
         except Exception:
@@ -268,6 +275,7 @@ def load_config() -> dict:
         'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
         'version_preference': DEFAULT_VERSION_PREFERENCE,
+        'subtitle_mode': 'none',
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
         'selected_targets': [],
@@ -325,6 +333,7 @@ class SmallToolWorker:
         self._scan_lock = threading.Lock()
         self._active_site = None
         self._active_site_lock = threading.Lock()
+        self._subtitle_mode = 'none'
 
     def _set_status(self, key: str, color: str = TEXT_DIM):
         if self._status:
@@ -621,6 +630,9 @@ class SmallToolWorker:
         cfg['output_folder'] = dest
         version_preference = _normalize_version_pref(cfg)
         cfg['version_preference'] = version_preference
+        subtitle_mode = normalize_subtitle_mode(cfg.get('subtitle_mode'))
+        cfg['subtitle_mode'] = subtitle_mode
+        self._subtitle_mode = subtitle_mode
         cfg.pop('missav_version_preference', None)
         os.makedirs(dest, exist_ok=True)
 
@@ -887,14 +899,21 @@ class SmallToolWorker:
         self._set_status('st_downloading', ACCENT)
         self._log(f'Found {len(all_new_videos)} new video(s). Downloading...')
         download_blocked = False
+        subtitle_incomplete = False
         for v in all_new_videos:
             if self._stop.is_set():
                 return False
-            if self._download_one(v, dest) == 'blocked':
+            result = self._download_one(v, dest)
+            if result == 'blocked':
                 download_blocked = True
+            elif result == 'subtitle_failed':
+                subtitle_incomplete = True
 
         if download_blocked:
             self._log('[WARN] Download blocked — will retry before marking first run done.')
+            return False
+        if subtitle_incomplete:
+            self._log(f'[WARN] {T("subtitle_retry_pending")}')
             return False
         if scan_blocked or not scan_had_success:
             self._log('[WARN] Scan incomplete — first run flag not updated.')
@@ -904,7 +923,7 @@ class SmallToolWorker:
         save_config(cfg)
         return True
 
-    def _download_one(self, video: dict, dest: str):
+    def _download_one(self, video: dict, dest: str, subtitle_mode: Optional[str] = None):
         vurl = video['url']
         title = video.get('title', '') or vurl.rstrip('/').split('/')[-1]
         site = video.get('_site', '?')
@@ -933,12 +952,7 @@ class SmallToolWorker:
             site_obj._progress_callback = _on_progress
             with self._active_site_lock:
                 self._active_site = site_obj
-            try:
-                ok = site_obj.start_download()
-            finally:
-                with self._active_site_lock:
-                    if self._active_site is site_obj:
-                        self._active_site = None
+            ok = site_obj.start_download()
             if ok is False and not getattr(site_obj, '_cancel_job', False):
                 self._log('  [ERR] download failed')
                 self._cleanup_temp(site_obj)
@@ -948,6 +962,49 @@ class SmallToolWorker:
                 self._log('  [CANCELLED]')
                 self._cleanup_temp(site_obj)
                 return
+            subtitle_mode = normalize_subtitle_mode(
+                self._subtitle_mode if subtitle_mode is None else subtitle_mode)
+            if subtitle_mode != 'none':
+                last_stage = [None]
+                stage_keys = {
+                    'queued': 'subtitle_stage_queued',
+                    'runtime': 'subtitle_stage_runtime',
+                    'model': 'subtitle_stage_model',
+                    'audio': 'subtitle_stage_audio',
+                    'transcribe_ja': 'subtitle_stage_transcribe_ja',
+                    'translate_en': 'subtitle_stage_translate_en',
+                    'translate_zh': 'subtitle_stage_translate_zh',
+                }
+
+                def _subtitle_progress(stage, percent):
+                    key = stage_keys.get(stage, 'subtitle_stage_queued')
+                    phase = T(key)
+                    if stage != last_stage[0]:
+                        self._log(f'  [SUBTITLE] {phase}')
+                        last_stage[0] = stage
+                    with self._progress_lock:
+                        if percent is None:
+                            self._progress = (0, -1, 0, f'{title} · {phase}')
+                        else:
+                            self._progress = (percent, 100, 0, f'{title} · {phase}')
+                    self._set_status('st_subtitling', ACCENT)
+
+                try:
+                    subtitle_result = generate_subtitles(
+                        site_obj._get_video_savename(), subtitle_mode,
+                        progress_callback=_subtitle_progress,
+                        cancel_check=lambda: (
+                            self._stop.is_set()
+                            or bool(getattr(site_obj, '_cancel_job', False))),
+                    )
+                    self._log(T(
+                        'subtitle_ready', count=len(subtitle_result.files)))
+                except SubtitleCancelled:
+                    self._log(f'  [CANCELLED] {T("subtitle_cancelled")}')
+                    return
+                except Exception as exc:
+                    self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
+                    return 'subtitle_failed'
             self._log(f'  [OK] {title}')
             self._mark_seen(vurl, title, video=video)
         except MirrorsBlockedError as e:
@@ -960,6 +1017,9 @@ class SmallToolWorker:
             if site_obj:
                 self._cleanup_temp(site_obj)
         finally:
+            with self._active_site_lock:
+                if self._active_site is site_obj:
+                    self._active_site = None
             with self._progress_lock:
                 self._progress = None
 
@@ -1167,6 +1227,8 @@ class SmallToolApp(ctk.CTk):
             'resolution': self._cfg.get('resolution', 'highest'),
             'version_preference': self._cfg.get(
                 'version_preference', DEFAULT_VERSION_PREFERENCE),
+            'subtitle_mode': normalize_subtitle_mode(
+                self._cfg.get('subtitle_mode')),
             'running': self._worker.is_running(),
             'check_now_state': check_state,
             'status_key': self._status_key,
@@ -1179,12 +1241,14 @@ class SmallToolApp(ctk.CTk):
         self._cfg['baseline_date'] = snapshot['baseline_date']
         self._cfg['resolution'] = snapshot['resolution']
         self._cfg['version_preference'] = snapshot['version_preference']
+        self._cfg['subtitle_mode'] = snapshot['subtitle_mode']
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(snapshot['resolution'])
         self._folder_var.set(snapshot['folder'])
         self._date_var.set(snapshot['baseline_date'])
         self._res_var.set(self._resolution_label())
         self._version_var.set(self._version_label())
+        self._subtitle_var.set(self._subtitle_label())
 
         for var in self._check_vars.values():
             var.set(False)
@@ -1272,6 +1336,31 @@ class SmallToolApp(ctk.CTk):
             T('st_pref_english'): 'english-subtitle',
             T('st_pref_reducing_mosaic'): 'reducing-mosaic',
         }.get(str(label or ''), DEFAULT_VERSION_PREFERENCE)
+
+    def _subtitle_label(self) -> str:
+        return {
+            'none': T('subtitle_none'),
+            'ja': T('subtitle_ja'),
+            'en': T('subtitle_en'),
+            'zh': T('subtitle_zh'),
+            'all': T('subtitle_all'),
+        }.get(normalize_subtitle_mode(self._cfg.get('subtitle_mode')),
+              T('subtitle_none'))
+
+    def _subtitle_values(self) -> list[str]:
+        return [
+            T('subtitle_none'), T('subtitle_ja'), T('subtitle_en'),
+            T('subtitle_zh'), T('subtitle_all'),
+        ]
+
+    def _subtitle_pref_from_label(self, label: str) -> str:
+        return {
+            T('subtitle_none'): 'none',
+            T('subtitle_ja'): 'ja',
+            T('subtitle_en'): 'en',
+            T('subtitle_zh'): 'zh',
+            T('subtitle_all'): 'all',
+        }.get(str(label or ''), 'none')
 
     def _set_status_key(self, key: str, fg: str = TEXT_DIM):
         self._status_key = key
@@ -1485,6 +1574,7 @@ class SmallToolApp(ctk.CTk):
             dropdown_text_color=TEXT_PRI,
             font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
                 side='left')
+
         ctk.CTkLabel(
             date_group, text=T('st_date_hint'), text_color=TEXT_DIM,
             font=(font_family, 9), wraplength=440, justify='left').pack(
@@ -1526,6 +1616,24 @@ class SmallToolApp(ctk.CTk):
             dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI,
             font=(font_family, 10), dropdown_font=(font_family, 10)).pack(
+                side='left')
+
+        subtitle_row = ctk.CTkFrame(res_group, fg_color='transparent')
+        subtitle_row.pack(fill='x', pady=(6, 0))
+        ctk.CTkLabel(
+            subtitle_row, text=T('subtitle_setting'), text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold'), width=108, anchor='e').pack(
+                side='left', padx=(0, 8))
+        self._subtitle_var = tk.StringVar(value=self._subtitle_label())
+        ctk.CTkOptionMenu(
+            subtitle_row, variable=self._subtitle_var,
+            values=self._subtitle_values(), command=self._on_subtitle_change,
+            width=178, height=34, corner_radius=CONTROL_RADIUS,
+            fg_color=BG_INPUT, button_color=BORDER_HOVER,
+            button_hover_color=ACCENT, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI,
+            font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
                 side='left')
         # Apply saved preference immediately (before auto-start)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
@@ -2104,6 +2212,10 @@ class SmallToolApp(ctk.CTk):
         self._cfg.pop('missav_version_preference', None)
         save_config(self._cfg)
 
+    def _on_subtitle_change(self, val):
+        self._cfg['subtitle_mode'] = self._subtitle_pref_from_label(val)
+        save_config(self._cfg)
+
     def _start_worker(self):
         folder = self._prepare_output_folder()
         if not folder:
@@ -2286,17 +2398,22 @@ class SmallToolApp(ctk.CTk):
         scan = self._worker.get_scan_state()
         try:
             if prog:
-                self._set_progress_display_mode('download')
                 done, total, speed, title = prog
                 if total > 0:
+                    self._set_progress_display_mode('download')
                     pct = int(done * 100 / total)
                     self._prog_bar.set(max(0.0, min(1.0, pct / 100)))
                     self._prog_pct.configure(text=f'{pct}%')
                     speed_str = (f'{speed / 1024:.0f} KB/s' if speed < 1024 * 1024
                                  else f'{speed / 1024 / 1024:.1f} MB/s')
                     self._prog_info.configure(text=f'{done}/{total} | {speed_str}')
+                elif total < 0:
+                    self._set_progress_display_mode('scan')
+                    self._prog_pct.configure(text='')
+                    self._prog_info.configure(text=T('subtitle_processing'))
                 else:
                     # Preparing phase (0, 0, ...)
+                    self._set_progress_display_mode('download')
                     self._prog_bar.set(0)
                     self._prog_pct.configure(text='')
                     self._prog_info.configure(text=T('st_preparing'))

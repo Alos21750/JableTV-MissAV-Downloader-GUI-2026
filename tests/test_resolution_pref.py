@@ -161,3 +161,18 @@ def test_config_resolution_round_trip_invalid_and_preserves_theme_lang(tmp_path,
     with open(path, 'w', encoding='utf-8') as f:
         json.dump({'theme': 'light', 'lang': 'en', 'resolution': 'bad'}, f)
     assert config.get_resolution_pref() == 'highest'
+
+
+def test_config_subtitle_mode_round_trip_and_validation(tmp_path, monkeypatch):
+    path = tmp_path / 'ui_prefs.json'
+    monkeypatch.setattr(config, '_ui_prefs_path', lambda: str(path))
+
+    assert config.get_subtitle_pref() == 'none'
+    config.set_subtitle_pref('all')
+    assert config.get_subtitle_pref() == 'all'
+
+    config.set_subtitle_pref('not-a-mode')
+    assert config.get_subtitle_pref() == 'none'
+
+    with open(path, 'r', encoding='utf-8') as handle:
+        assert json.load(handle)['subtitle_mode'] == 'none'

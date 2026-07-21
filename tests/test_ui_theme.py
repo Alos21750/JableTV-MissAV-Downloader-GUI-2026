@@ -55,7 +55,7 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
 
 
 def test_current_version_and_global_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.30'
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.31'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -68,7 +68,7 @@ def test_current_version_and_global_smalltool_copy_are_complete():
         'st_pref_english', 'st_pref_reducing_mosaic',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v2.5.30', language
+        assert strings['version_label'] == 'v2.5.31', language
         assert required <= strings.keys(), language
 
 
@@ -76,11 +76,11 @@ def test_windows_version_resources_match_app_version():
     root = Path(__file__).resolve().parents[1]
     generator = (root / 'build_tmp' / 'gen_version.py').read_text(
         encoding='utf-8')
-    assert 'VERSION = (2, 5, 30, 0)' in generator
+    assert 'VERSION = (2, 5, 31, 0)' in generator
     for name in ('JableTV_Modern.version', 'Jable_smalltool.version'):
         resource = (root / 'build_tmp' / name).read_text(encoding='utf-8')
-        assert 'filevers=(2, 5, 30, 0)' in resource
-        assert "StringStruct('FileVersion', '2.5.30.0')" in resource
+        assert 'filevers=(2, 5, 31, 0)' in resource
+        assert "StringStruct('FileVersion', '2.5.31.0')" in resource
 
 
 def test_modern_defers_initial_workers_until_mainloop():

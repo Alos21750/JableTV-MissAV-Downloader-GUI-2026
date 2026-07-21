@@ -22,3 +22,4 @@ CLAUDE.md
 .claude/
 .wrangler/
 *.log
+crash_log.txt

@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.29 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.31 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## Pick the right tool
@@ -52,13 +52,14 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 1. Open Browse, choose JableTV, MissAV, or SupJav, then select a category or search.
 2. Select multiple cards and add them to the queue, or download the selection immediately.
 3. You can also paste URLs on the Download tab or import a `.txt` / `.csv` list.
-4. Use Settings for the destination, quality, concurrency, speed limit, and proxy.
+4. Use Settings for the destination, quality, concurrency, speed limit, AI subtitles, and proxy.
 
 | Capability | Current behavior |
 |---|---|
 | Download queue | Per-item state, progress, and speed; queue persistence; retry one failed item |
 | Concurrency | 2 jobs by default, up to 10 |
 | Quality preference | Highest, 1080p, 720p, 480p, 360p, or Lowest; actual variants depend on the source |
+| AI subtitles | Off, Japanese, English, Traditional Chinese, or all three as selectable sidecar SRT files |
 | URL input | Clipboard detection, manual paste, and text/CSV batch import |
 | Proxy | App-scoped HTTP, HTTPS, SOCKS4, and SOCKS5; no change to the Windows global proxy |
 | Updates | Background GitHub Release check; the user confirms before installing an update |
@@ -66,14 +67,15 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 ## SmallTool: monitor categories automatically
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.29 Traditional Chinese dark interface showing MissAV categories, date, quality and version priority" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.31 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
 </p>
 
 1. Choose a destination. If left unset, SmallTool creates `tmp` beside the executable.
 2. Pick a baseline date from the calendar, or use Yesterday / 1 / 2 / 3 / 6 months ago.
 3. Choose quality and version priority: Chinese subtitles, uncensored/leak, standard, English subtitles, or reduced mosaic.
-4. Search and select categories on any of the three site tabs; group-wide selection is available.
-5. Press Start Monitoring. The category panel collapses and progress shows the site, category, page, and candidate count currently being scanned.
+4. Choose AI subtitles: off, Japanese, English, Traditional Chinese, or all three.
+5. Search and select categories on any of the three site tabs; group-wide selection is available.
+6. Press Start Monitoring. The category panel collapses and progress shows the active scan or subtitle stage.
 
 | Site | Selectable targets | Groups |
 |---|---:|---|
@@ -84,6 +86,13 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 SmallTool checks every 24 hours and also provides Check Now. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—SmallTool does not guess.
 
 State is stored in `.Jable_smalltool` beside the executable when writable, otherwise in `%APPDATA%\JableTV Downloader\smalltool`.
+
+## AI-generated subtitles
+
+- Both Windows GUIs offer **Off / Japanese / English / Traditional Chinese / all three** before download. They create `.ja.srt`, `.en.srt`, and `.zh-TW.srt` beside the video without modifying the MP4.
+- Japanese transcription runs locally with the official [whisper.cpp](https://github.com/ggml-org/whisper.cpp). First use downloads and SHA-256-verifies the approximately 60 MB multilingual [base-q5_1 model](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base-q5_1.bin) plus the [official Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main). The current source-language assumption is Japanese audio, and VAD skips non-speech regions.
+- English and Traditional Chinese send only transcribed subtitle text to a no-key Google translation endpoint; video and audio are never uploaded. This free route has no service guarantee. On failure the video and Japanese SRT are kept, and the GUI reports the problem and offers a retry.
+- Runtime depends on CPU, video length, and the amount of speech. All-three mode reuses one local transcription pass.
 
 ## Supported scope
 

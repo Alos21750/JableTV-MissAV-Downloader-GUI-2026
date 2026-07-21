@@ -1,0 +1,69 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "*.py"
+      - "M3U8Sites/**"
+      - "build_tmp/**"
+      - "requirements.txt"
+      - "tests/**"
+      - ".github/workflows/windows-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller pytest pytest-timeout
+
+      - name: Run tests
+        run: python -m pytest tests/ -q --timeout=20
+
+      - name: Build Modern and SmallTool
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist, build | Out-Null
+          Push-Location build_tmp
+          python -m PyInstaller --noconfirm --clean --distpath ..\dist --workpath ..\build JableTV_Modern.spec
+          python -m PyInstaller --noconfirm --clean --distpath ..\dist --workpath ..\build Jable_smalltool.spec
+          Pop-Location
+
+      - name: Verify executable metadata
+        shell: pwsh
+        run: |
+          $expected = "2.5.31.0"
+          $files = @("dist\JableTV_Modern.exe", "dist\Jable_smalltool.exe")
+          foreach ($file in $files) {
+            if (!(Test-Path -LiteralPath $file)) { throw "Missing $file" }
+            $version = (Get-Item -LiteralPath $file).VersionInfo.FileVersion
+            if ($version -ne $expected) { throw "$file version $version; expected $expected" }
+            Write-Host "$file $version $((Get-Item -LiteralPath $file).Length) bytes"
+          }
+
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: jabletv-windows-${{ github.sha }}
+          path: dist/*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

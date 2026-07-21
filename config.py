@@ -22,6 +22,7 @@ _PROXY_UNSET = object()
 _proxy_url_cache = _PROXY_UNSET
 CF_OVERRIDES = {}
 VALID_RESOLUTION_PREFS = {'highest', 'lowest', '1080', '720', '480', '360'}
+VALID_SUBTITLE_PREFS = {'none', 'ja', 'en', 'zh', 'all'}
 VALID_PROXY_SCHEMES = {
     'http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h',
 }
@@ -126,6 +127,28 @@ def set_resolution_pref(pref):
         with _prefs_lock:
             prefs = _load_prefs()
             prefs['resolution'] = pref
+            _save_prefs(prefs)
+    except Exception:
+        pass
+
+
+def get_subtitle_pref():
+    pref = _load_prefs().get('subtitle_mode')
+    if isinstance(pref, str):
+        pref = pref.strip().lower()
+        if pref in VALID_SUBTITLE_PREFS:
+            return pref
+    return 'none'
+
+
+def set_subtitle_pref(pref):
+    pref = str(pref or '').strip().lower()
+    if pref not in VALID_SUBTITLE_PREFS:
+        pref = 'none'
+    try:
+        with _prefs_lock:
+            prefs = _load_prefs()
+            prefs['subtitle_mode'] = pref
             _save_prefs(prefs)
     except Exception:
         pass

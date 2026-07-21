@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.30 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.31 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## 先選一個工具
@@ -52,13 +52,14 @@
 1. 在「瀏覽」選 JableTV、MissAV 或 SupJav，再選分類或輸入關鍵字。
 2. 勾選多部影片後加入佇列，或直接下載選取項目。
 3. 也可在「下載」貼上網址，或從 `.txt` / `.csv` 匯入多個網址。
-4. 在「設定」調整儲存位置、畫質、並行數、速度上限與 Proxy。
+4. 在「設定」調整儲存位置、畫質、並行數、速度上限、AI 字幕與 Proxy。
 
 | 能力 | 現行行為 |
 |---|---|
 | 下載佇列 | 每項顯示狀態、進度與速度；佇列會保存，失敗項目可單獨重試 |
 | 並行下載 | 預設 2，最多 10 個工作 |
 | 畫質偏好 | 最高、1080p、720p、480p、360p、最低；實際可用畫質依來源而定 |
+| AI 字幕 | 不產生、日文、英文、繁中或三語；輸出為播放器可切換的同名 SRT |
 | 網址操作 | 剪貼簿偵測、手動貼上、文字／CSV 批次匯入 |
 | Proxy | 程式內 HTTP、HTTPS、SOCKS4、SOCKS5；不修改 Windows 全域代理 |
 | 更新 | 背景檢查 GitHub Release，有新版時由使用者確認後更新 |
@@ -66,14 +67,15 @@
 ## SmallTool：依分類自動追新
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.30 Traditional Chinese dark interface showing MissAV categories, date, quality and version priority" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.31 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority and AI subtitles" />
 </p>
 
 1. 選擇儲存位置；若不選，會在執行檔旁自動建立 `tmp`。
 2. 用日曆選基準日期，或使用「昨天、1／2／3／6 個月前」快捷選項。
 3. 選畫質與版本優先：中文字幕、無碼／流出、一般版、英文字幕、馬賽克減弱。
-4. 在三個網站分頁搜尋並勾選分類；支援群組全選。
-5. 按「開始監控」。分類區會自動收合，進度區會顯示正在掃描的網站、分類、頁數與候選數。
+4. 選 AI 字幕：不產生、日文、英文、繁中，或一次產生三語。
+5. 在三個網站分頁搜尋並勾選分類；支援群組全選。
+6. 按「開始監控」。分類區會自動收合，進度區會顯示正在掃描或產生字幕的階段。
 
 | 網站 | 可選目標數 | 分組內容 |
 |---|---:|---|
@@ -84,6 +86,13 @@
 SmallTool 每 24 小時自動檢查，也可按「立即檢查」。同一番號跨分類或跨網站重複時，會優先保留符合使用者版本偏好的候選；無法可靠辨識番號時只按完全相同網址去重，不猜測合併。
 
 下載記錄優先存於執行檔旁的 `.Jable_smalltool`；若該位置不可寫，會改用 `%APPDATA%\JableTV Downloader\smalltool`。
+
+## AI 生成字幕
+
+- 兩個 Windows GUI 都可在下載前選擇 **不產生／日文／英文／繁中／三語**。完成後會在影片旁建立 `.ja.srt`、`.en.srt`、`.zh-TW.srt`，不修改原始 MP4。
+- 日文辨識使用官方 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) 在本機執行；首次使用會下載經 SHA-256 驗證、約 60 MB 的 [multilingual base-q5_1 模型](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base-q5_1.bin) 與[官方 Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main)。目前以日語音軌為來源，VAD 會略過沒有語音的區段。
+- 英文與繁中只把辨識後的字幕文字送到免金鑰 Google 翻譯端點，影片與音訊不會上傳。這條免費路徑沒有服務保證；失敗時影片與日文 SRT 仍會保留，介面會明確顯示並允許重試。
+- 產生速度取決於 CPU、影片長度與實際語音比例；三語共用同一次本機語音辨識。
 
 ## 支援範圍
 

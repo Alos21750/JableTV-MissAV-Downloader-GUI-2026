@@ -31,6 +31,11 @@ from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import MirrorsBlockedError
 from config import headers
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES, state_label
+from subtitle_engine import (
+    SubtitleCancelled,
+    generate_subtitles,
+    normalize_subtitle_mode,
+)
 from ui_theme import (
     ACCENT, ACCENT_HOVER, ACCENT_DIM,
     SUCCESS, SUCCESS_DIM, WARNING, WARNING_DIM, ERROR_C, ERROR_DIM,
@@ -40,7 +45,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.30'
+APP_VERSION = '2.5.31'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -67,13 +72,26 @@ SITES = {
 
 _STATE_PRIORITY = {
     '下載中': 0,
-    '準備中': 1,
-    '等待中': 2,
-    '未完成': 3,
-    '封鎖/解析失敗': 4,
-    '網址錯誤': 5,
-    '已下載': 6,
-    '已取消': 7,
+    '字幕準備中': 1,
+    '字幕辨識中': 2,
+    '字幕翻譯中': 3,
+    '準備中': 4,
+    '等待中': 5,
+    '未完成': 6,
+    '封鎖/解析失敗': 7,
+    '網址錯誤': 8,
+    '已下載': 9,
+    '已取消': 10,
+}
+
+_SUBTITLE_STATE_BY_STAGE = {
+    'queued': '字幕準備中',
+    'runtime': '字幕準備中',
+    'model': '字幕準備中',
+    'audio': '字幕準備中',
+    'transcribe_ja': '字幕辨識中',
+    'translate_en': '字幕翻譯中',
+    'translate_zh': '字幕翻譯中',
 }
 
 
@@ -111,8 +129,10 @@ class DownloadItem:
 class DownloadManager:
     """Thread-safe download manager with configurable concurrency."""
 
-    def __init__(self, on_update=None, max_concurrent: int = DEFAULT_CONCURRENT):
+    def __init__(self, on_update=None, max_concurrent: int = DEFAULT_CONCURRENT,
+                 subtitle_mode_getter=None):
         self._on_update = on_update
+        self._subtitle_mode_getter = subtitle_mode_getter or config.get_subtitle_pref
         self._pending: list[tuple[str, str]] = []
         self._active: dict[str, object] = {}
         self._items: dict[str, DownloadItem] = {}
@@ -294,12 +314,35 @@ class DownloadManager:
             ok = job.start_download()
             if ok is False and not job._cancel_job:
                 raise Exception(T('parse_failed_short'))
+            subtitle_warning = ''
+            if not job._cancel_job:
+                mode = normalize_subtitle_mode(self._subtitle_mode_getter())
+                if mode != 'none':
+                    def _subtitle_progress(stage, percent):
+                        state = _SUBTITLE_STATE_BY_STAGE.get(stage)
+                        if state:
+                            self._set_state(
+                                url, state,
+                                progress=percent if percent is not None else -1)
+
+                    try:
+                        generate_subtitles(
+                            job._get_video_savename(), mode,
+                            progress_callback=_subtitle_progress,
+                            cancel_check=lambda: bool(job._cancel_job),
+                        )
+                    except SubtitleCancelled:
+                        job._cancel_job = True
+                    except Exception as exc:
+                        subtitle_warning = T('subtitle_failed', error=str(exc))
             with self._lock:
                 self._active.pop(url, None)
             if job._cancel_job:
                 self._set_state(url, '已取消')
             else:
-                self._set_state(url, '已下載', progress=100)
+                self._set_state(
+                    url, '已下載', progress=100,
+                    error=subtitle_warning if subtitle_warning else None)
         except Exception as exc:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
             with self._lock:
@@ -379,7 +422,9 @@ class DownloadManager:
                     url = row.get('網址', '')
                     if url:
                         state = row.get('狀態', '')
-                        if state in ('下載中', '準備中', '等待中'):
+                        if state in (
+                                '下載中', '準備中', '等待中',
+                                '字幕準備中', '字幕辨識中', '字幕翻譯中'):
                             state = '未完成'
                         item = self.add_item(
                             url, row.get('名稱', ''), state,
@@ -1009,6 +1054,30 @@ class ModernApp(ctk.CTk):
             return f'{pref}p'
         return T('resolution_highest')
 
+    def _subtitle_values(self):
+        return [
+            T('subtitle_none'), T('subtitle_ja'), T('subtitle_en'),
+            T('subtitle_zh'), T('subtitle_all'),
+        ]
+
+    def _subtitle_pref_from_label(self, label):
+        return {
+            T('subtitle_none'): 'none',
+            T('subtitle_ja'): 'ja',
+            T('subtitle_en'): 'en',
+            T('subtitle_zh'): 'zh',
+            T('subtitle_all'): 'all',
+        }.get(str(label or ''), 'none')
+
+    def _subtitle_label(self):
+        return {
+            'none': T('subtitle_none'),
+            'ja': T('subtitle_ja'),
+            'en': T('subtitle_en'),
+            'zh': T('subtitle_zh'),
+            'all': T('subtitle_all'),
+        }.get(config.get_subtitle_pref(), T('subtitle_none'))
+
     def _on_lang_change(self, display_name):
         code = self._lang_code_by_name.get(display_name)
         if not code or code == get_lang():
@@ -1618,7 +1687,27 @@ class ModernApp(ctk.CTk):
                           dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
         ctk.CTkLabel(grp, text=T('resolution_desc'),
                      text_color=TEXT_DIM,
-                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 22))
+                     font=(ui_font(), 10)).pack(anchor='w', padx=(136, 0), pady=(0, 10))
+
+        # Selectable sidecar subtitles generated after each completed video
+        row_subtitle = ctk.CTkFrame(grp, fg_color='transparent')
+        row_subtitle.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(row_subtitle, text=T('subtitle_setting'), text_color=TEXT_PRI,
+                     font=(ui_font(), 12, 'bold'), width=116,
+                     anchor='w').pack(side='left')
+        self._subtitle_var = ctk.StringVar(value=self._subtitle_label())
+        ctk.CTkOptionMenu(
+            row_subtitle, values=self._subtitle_values(),
+            variable=self._subtitle_var, command=self._on_subtitle_change,
+            width=230, height=34, corner_radius=8,
+            fg_color=BG_INPUT, button_color=BORDER_HOVER,
+            button_hover_color=ACCENT, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
+            dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
+        ctk.CTkLabel(
+            grp, text=T('subtitle_desc'), text_color=TEXT_DIM,
+            font=(ui_font(), 10), wraplength=760, justify='left').pack(
+                anchor='w', padx=(136, 20), pady=(0, 22))
 
         # App-scoped network proxy
         proxy = ctk.CTkFrame(content, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
@@ -2549,6 +2638,9 @@ class ModernApp(ctk.CTk):
         set_resolution_pref(pref)
         config.set_resolution_pref(pref)
 
+    def _on_subtitle_change(self, val):
+        config.set_subtitle_pref(self._subtitle_pref_from_label(val))
+
     def _on_conc_change(self, val):
         self._dlmgr.max_concurrent = int(val)
 
@@ -2610,11 +2702,15 @@ class ModernApp(ctk.CTk):
     # ── Download list refresh (incremental — no destroy/rebuild storm) ──
     _STATE_COLORS = {
         '下載中': ACCENT, '準備中': WARNING, '等待中': WARNING,
+        '字幕準備中': ACCENT, '字幕辨識中': ACCENT,
+        '字幕翻譯中': ACCENT,
         '已下載': SUCCESS, '未完成': WARNING, '已取消': TEXT_DIM,
         '網址錯誤': ERROR_C, '封鎖/解析失敗': ERROR_C,
     }
     _STATE_BACKGROUNDS = {
         '下載中': ACCENT_DIM, '準備中': WARNING_DIM, '等待中': WARNING_DIM,
+        '字幕準備中': ACCENT_DIM, '字幕辨識中': ACCENT_DIM,
+        '字幕翻譯中': ACCENT_DIM,
         '已下載': SUCCESS_DIM, '未完成': WARNING_DIM, '已取消': BG_BADGE,
         '網址錯誤': ERROR_DIM, '封鎖/解析失敗': ERROR_DIM,
     }
@@ -2887,13 +2983,13 @@ class ModernApp(ctk.CTk):
         display_name = item.name or item.url
         detail = item.url
         detail_color = TEXT_DIM
-        if item.error and item.state in ('未完成', '封鎖/解析失敗'):
+        if item.error and item.state in ('未完成', '封鎖/解析失敗', '已下載'):
             err_text = T('blocked_vpn_hint') if item.error == ERR_BLOCKED else item.error
             err = err_text.replace('\n', ' ').strip()
             if len(err) > 110:
                 err = err[:107] + '...'
             detail = err
-            detail_color = ERROR_C
+            detail_color = WARNING if item.state == '已下載' else ERROR_C
         if w['last_name'] != display_name:
             try:
                 w['name_lbl'].configure(text=display_name)
@@ -2907,7 +3003,8 @@ class ModernApp(ctk.CTk):
                 return
             w['last_detail'] = detail
 
-        retryable = item.state in ('未完成', '封鎖/解析失敗', '已取消')
+        retryable = (item.state in ('未完成', '封鎖/解析失敗', '已取消')
+                     or (item.state == '已下載' and bool(item.error)))
         if retryable and not w['retry_visible']:
             w['retry_btn'].pack(side='right', padx=(2, 0), before=w['_before_remove'])
             w['retry_visible'] = True
@@ -2919,7 +3016,9 @@ class ModernApp(ctk.CTk):
             w['retry_visible'] = False
 
         # Progress bar: show only while downloading
-        is_downloading = (item.state == '下載中' and item.progress > 0)
+        is_downloading = (item.state in {
+            '下載中', '字幕準備中', '字幕辨識中', '字幕翻譯中'
+        } and item.progress > 0)
         if is_downloading:
             if not w['pb_visible']:
                 w['pb'].pack(side='left', padx=(0, 4))
