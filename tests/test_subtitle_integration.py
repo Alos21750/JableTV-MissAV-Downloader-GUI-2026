@@ -1,8 +1,25 @@
+import ast
 import os
+from pathlib import Path
 
 import gui_modern
 import jable_smalltool
 from subtitle_engine import SubtitleResult
+
+
+def test_smalltool_defers_subtitle_engine_until_download():
+    source = Path(jable_smalltool.__file__).read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    eager_imports = [
+        node for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and (
+            getattr(node, 'module', None) == 'subtitle_engine'
+            or any(alias.name == 'subtitle_engine'
+                   for alias in getattr(node, 'names', ()))
+        )
+    ]
+    assert eager_imports == []
 
 
 class FakeDownloadJob:

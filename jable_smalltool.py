@@ -67,11 +67,6 @@ from M3U8Sites.SiteSupJav import SupJavBrowser
 from M3U8Sites.M3U8Crawler import fetch_with_mirrors, MirrorsBlockedError
 import config
 from locales import T, set_lang, get_lang, ui_font, LANGUAGES
-from subtitle_engine import (
-    SubtitleCancelled,
-    generate_subtitles,
-    normalize_subtitle_mode,
-)
 from smalltool_categories import (
     SITES,
     find_target,
@@ -80,6 +75,22 @@ from smalltool_categories import (
     selection_key,
     target_label,
 )
+
+# Keep the optional AI subtitle stack off SmallTool's startup path.  Frozen
+# one-file builds should be able to paint the window before importing requests,
+# FFmpeg discovery, and the subtitle runtime; those are only needed after a
+# video has finished downloading.
+_VALID_SUBTITLE_MODES = {'none', 'ja', 'en', 'zh', 'all'}
+
+
+def normalize_subtitle_mode(value) -> str:
+    mode = str(value or 'none').strip().lower()
+    return mode if mode in _VALID_SUBTITLE_MODES else 'none'
+
+
+def generate_subtitles(*args, **kwargs):
+    from subtitle_engine import generate_subtitles as _generate_subtitles
+    return _generate_subtitles(*args, **kwargs)
 from video_identity import (
     DEFAULT_VERSION_PREFERENCE,
     VALID_VERSION_PREFERENCES,
@@ -988,6 +999,12 @@ class SmallToolWorker:
                         else:
                             self._progress = (percent, 100, 0, f'{title} · {phase}')
                     self._set_status('st_subtitling', ACCENT)
+
+                try:
+                    from subtitle_engine import SubtitleCancelled
+                except Exception as exc:
+                    self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
+                    return 'subtitle_failed'
 
                 try:
                     subtitle_result = generate_subtitles(
