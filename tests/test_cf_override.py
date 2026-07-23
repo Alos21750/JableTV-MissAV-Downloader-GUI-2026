@@ -97,7 +97,7 @@ class FakeScraper:
         self.status_codes = list(status_codes or [200])
         self.calls = []
 
-    def get(self, url, timeout=None, headers=None, cookies=None):
+    def get(self, url, timeout=None, headers=None, cookies=None, proxies=None):
         self.calls.append((dict(headers or {}), cookies))
         status = self.status_codes.pop(0) if self.status_codes else 200
         return Resp(url, status_code=status)

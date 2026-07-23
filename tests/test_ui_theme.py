@@ -55,7 +55,7 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
 
 
 def test_current_version_and_global_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.31'
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.32'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -68,7 +68,7 @@ def test_current_version_and_global_smalltool_copy_are_complete():
         'st_pref_english', 'st_pref_reducing_mosaic',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v2.5.31', language
+        assert strings['version_label'] == 'v2.5.32', language
         assert required <= strings.keys(), language
 
 
@@ -76,11 +76,11 @@ def test_windows_version_resources_match_app_version():
     root = Path(__file__).resolve().parents[1]
     generator = (root / 'build_tmp' / 'gen_version.py').read_text(
         encoding='utf-8')
-    assert 'VERSION = (2, 5, 31, 0)' in generator
+    assert 'VERSION = (2, 5, 32, 0)' in generator
     for name in ('JableTV_Modern.version', 'Jable_smalltool.version'):
         resource = (root / 'build_tmp' / name).read_text(encoding='utf-8')
-        assert 'filevers=(2, 5, 31, 0)' in resource
-        assert "StringStruct('FileVersion', '2.5.31.0')" in resource
+        assert 'filevers=(2, 5, 32, 0)' in resource
+        assert "StringStruct('FileVersion', '2.5.32.0')" in resource
 
 
 def test_modern_defers_initial_workers_until_mainloop():
@@ -97,6 +97,87 @@ def test_modern_defers_initial_workers_until_mainloop():
     app._start_initial_background_tasks()
 
     assert calls == [('update', {'manual': False}), ('categories', {})]
+
+
+def test_smalltool_balances_category_and_activity_regions():
+    assert jable_smalltool.DEFAULT_WINDOW_WIDTH == 1180
+    assert jable_smalltool.DEFAULT_WINDOW_HEIGHT == 780
+    assert ui_theme.category_columns_for_width(
+        jable_smalltool.DEFAULT_WINDOW_WIDTH) == 3
+
+    source = inspect.getsource(jable_smalltool.SmallToolApp._build_ui)
+    assert "main.pack(fill='both', expand=True" in source
+    assert 'main.grid_columnconfigure(0, weight=1)' in source
+    assert 'main.grid_rowconfigure(1, weight=3, minsize=190)' in source
+    assert 'main.grid_rowconfigure(4, weight=2, minsize=110)' in source
+    assert 'cfg_card.grid(row=0' in source
+    assert 'selection.grid(row=1' in source
+    assert 'ctrl.grid(row=2' in source
+    assert 'prog_outer.grid(row=3' in source
+    assert 'activity.grid(row=4' in source
+
+    collapse_source = inspect.getsource(
+        jable_smalltool.SmallToolApp._set_categories_collapsed)
+    assert '1, weight=0, minsize=0' in collapse_source
+    assert '1, weight=3, minsize=190' in collapse_source
+
+
+def test_both_apps_expose_windows_proxy_mode_and_mode_aware_status():
+    modern_ui = inspect.getsource(gui_modern.ModernApp._build_settings_tab)
+    smalltool_ui = inspect.getsource(jable_smalltool.SmallToolApp._build_ui)
+    for source in (modern_ui, smalltool_ui):
+        assert "text=T('proxy_windows')" in source
+        assert 'command=self._on_proxy_windows' in source
+
+    for cls in (gui_modern.ModernApp, jable_smalltool.SmallToolApp):
+        status_source = inspect.getsource(cls._refresh_proxy_status)
+        assert "config.get_proxy_mode()" in status_source
+        assert "config.refresh_system_proxy()" in status_source
+        assert "T('proxy_windows_pac')" in status_source
+
+
+def test_modern_concurrency_is_editable_persisted_and_clamped(monkeypatch):
+    assert gui_modern.MAX_CONCURRENT == 32
+    init_source = inspect.getsource(gui_modern.ModernApp.__init__)
+    settings_source = inspect.getsource(
+        gui_modern.ModernApp._build_settings_tab)
+    footer_source = inspect.getsource(
+        gui_modern.ModernApp._refresh_downloads)
+    assert 'config.get_download_concurrency()' in init_source
+    assert 'self._conc_entry = ctk.CTkEntry(' in settings_source
+    assert "self._conc_entry.bind('<Return>'" in settings_source
+    assert "'subtitle_queue_status'" in footer_source
+
+    class _Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    app = gui_modern.ModernApp.__new__(gui_modern.ModernApp)
+    app._conc_var = _Var('99')
+    app._dlmgr = types.SimpleNamespace(max_concurrent=2)
+    saved = []
+
+    def _save(value):
+        saved.append(value)
+        return max(1, min(int(value), 32))
+
+    monkeypatch.setattr(gui_modern.config, 'set_download_concurrency', _save)
+    app._on_conc_change()
+
+    assert saved == [99]
+    assert app._dlmgr.max_concurrent == 32
+    assert app._conc_var.get() == '32'
+
+    app._conc_var.set('invalid')
+    app._on_conc_change()
+    assert saved == [99]
+    assert app._conc_var.get() == '32'
 
 
 def test_global_version_selector_saves_internal_preference(monkeypatch):

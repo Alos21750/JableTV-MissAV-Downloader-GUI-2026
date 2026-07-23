@@ -50,7 +50,7 @@ jobs:
       - name: Verify executable metadata
         shell: pwsh
         run: |
-          $expected = "2.5.31.0"
+          $expected = "2.5.32.0"
           $files = @("dist\JableTV_Modern.exe", "dist\Jable_smalltool.exe")
           foreach ($file in $files) {
             if (!(Test-Path -LiteralPath $file)) { throw "Missing $file" }

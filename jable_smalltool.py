@@ -119,7 +119,9 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.31'
+APP_VERSION = '2.5.32'
+DEFAULT_WINDOW_WIDTH = 1180
+DEFAULT_WINDOW_HEIGHT = 780
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
@@ -1120,7 +1122,7 @@ class SmallToolApp(ctk.CTk):
         self._needs_lang_prompt = (stored is None)
 
         self._update_window_title()
-        self.geometry('980x800')
+        self.geometry(f'{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}')
         self.minsize(820, 680)
         self.configure(fg_color=BG_DARK)
 
@@ -1143,7 +1145,8 @@ class SmallToolApp(ctk.CTk):
         self._target_widgets: list[tuple[object, str]] = []
         self._filter_groups: list[dict] = []
         self._category_groups: list[list[object]] = []
-        self._category_columns = category_columns_for_width(980)
+        self._category_columns = category_columns_for_width(
+            DEFAULT_WINDOW_WIDTH)
         self._categories_collapsed = False
         self._progress_display_mode = 'idle'
         self._resize_after_id = None
@@ -1492,12 +1495,16 @@ class SmallToolApp(ctk.CTk):
 
         main = ctk.CTkFrame(self, fg_color='transparent')
         main.pack(fill='both', expand=True, padx=18, pady=(14, 12))
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(1, weight=3, minsize=190)
+        main.grid_rowconfigure(4, weight=2, minsize=110)
+        self._main_frame = main
 
         # ── Config row: folder + date ───────────────────────────────
         cfg_card = ctk.CTkFrame(
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
-        cfg_card.pack(fill='x')
+        cfg_card.grid(row=0, column=0, sticky='ew')
         cfg_card.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
@@ -1535,13 +1542,20 @@ class SmallToolApp(ctk.CTk):
         proxy_actions = ctk.CTkFrame(cfg_card, fg_color='transparent')
         proxy_actions.grid(row=1, column=2, padx=(8, 16), pady=(2, 2))
         ctk.CTkButton(
-            proxy_actions, text=T('proxy_save'), width=62, height=34,
+            proxy_actions, text=T('proxy_save'), width=58, height=34,
             corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
             hover_color=ACCENT_HOVER, text_color=WHITE,
             font=(font_family, 9, 'bold'), command=self._on_proxy_save).pack(
                 side='left')
         ctk.CTkButton(
-            proxy_actions, text=T('proxy_clear'), width=62, height=34,
+            proxy_actions, text=T('proxy_windows'), width=70, height=34,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(font_family, 9), command=self._on_proxy_windows).pack(
+                side='left', padx=(6, 0))
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_clear'), width=58, height=34,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
@@ -1660,7 +1674,8 @@ class SmallToolApp(ctk.CTk):
         selection = ctk.CTkFrame(
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
-        selection.pack(fill='both', expand=True, pady=(12, 10))
+        selection.grid(row=1, column=0, sticky='nsew',
+                       pady=(12, 10))
         self._selection_panel = selection
 
         selection_header = ctk.CTkFrame(selection, fg_color='transparent')
@@ -1782,7 +1797,7 @@ class SmallToolApp(ctk.CTk):
 
         # ── Control row ─────────────────────────────────────────────
         ctrl = ctk.CTkFrame(main, fg_color='transparent')
-        ctrl.pack(fill='x', pady=(0, 10))
+        ctrl.grid(row=2, column=0, sticky='ew', pady=(0, 10))
 
         self._start_btn = ctk.CTkButton(
             ctrl, text=T('st_start'), width=142, height=40,
@@ -1824,7 +1839,7 @@ class SmallToolApp(ctk.CTk):
         prog_outer = ctk.CTkFrame(
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
-        prog_outer.pack(fill='x', pady=(0, 10))
+        prog_outer.grid(row=3, column=0, sticky='ew', pady=(0, 10))
 
         self._prog_title = ctk.CTkLabel(
             prog_outer, text=T('st_progress_idle'), text_color=TEXT_SEC,
@@ -1855,7 +1870,7 @@ class SmallToolApp(ctk.CTk):
         activity = ctk.CTkFrame(
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
-        activity.pack(fill='both', expand=True)
+        activity.grid(row=4, column=0, sticky='nsew')
         activity_header = ctk.CTkFrame(activity, fg_color='transparent')
         activity_header.pack(fill='x', padx=14, pady=(9, 5))
         ctk.CTkLabel(
@@ -1884,13 +1899,25 @@ class SmallToolApp(ctk.CTk):
         if self._categories_collapsed:
             self._category_filter_box.pack_forget()
             self._category_tabview.pack_forget()
-            self._selection_panel.pack_configure(fill='x', expand=False)
+            if '_main_frame' in self.__dict__:
+                self._main_frame.grid_rowconfigure(
+                    1, weight=0, minsize=0)
+                self._selection_panel.grid_configure(sticky='ew')
+            else:
+                self._selection_panel.pack_configure(
+                    fill='x', expand=False)
             button_text = T('st_categories_expand')
         else:
             self._category_filter_box.pack(side='right', padx=(0, 8))
             self._category_tabview.pack(
                 fill='both', expand=True, padx=10, pady=(0, 10))
-            self._selection_panel.pack_configure(fill='both', expand=True)
+            if '_main_frame' in self.__dict__:
+                self._main_frame.grid_rowconfigure(
+                    1, weight=3, minsize=190)
+                self._selection_panel.grid_configure(sticky='nsew')
+            else:
+                self._selection_panel.pack_configure(
+                    fill='both', expand=True)
             button_text = T('st_categories_collapse')
         self._categories_toggle_btn.configure(text=button_text)
 
@@ -2189,12 +2216,24 @@ class SmallToolApp(ctk.CTk):
         return folder
 
     def _refresh_proxy_status(self, saved=False):
-        enabled = bool(config.get_proxy_url())
-        text = T('proxy_enabled') if enabled else T('proxy_disabled')
+        mode = config.get_proxy_mode()
+        if mode == 'manual' and config.get_proxy_url():
+            text, color = T('proxy_enabled'), SUCCESS
+        elif mode == 'system':
+            _display_url, status = config.refresh_system_proxy()
+            if status == 'detected':
+                text, color = T('proxy_windows_enabled'), SUCCESS
+            elif status == 'pac':
+                text, color = T('proxy_windows_pac'), WARNING
+            elif status == 'invalid':
+                text, color = T('proxy_windows_invalid'), ERROR_C
+            else:
+                text, color = T('proxy_windows_missing'), WARNING
+        else:
+            text, color = T('proxy_disabled'), TEXT_DIM
         if saved:
             text = f"{T('proxy_saved')} · {text}"
-        self._proxy_status_lbl.configure(
-            text=text, text_color=SUCCESS if enabled else TEXT_DIM)
+        self._proxy_status_lbl.configure(text=text, text_color=color)
 
     def _on_proxy_save(self):
         try:
@@ -2204,6 +2243,15 @@ class SmallToolApp(ctk.CTk):
                 text=T('proxy_invalid'), text_color=ERROR_C)
             return
         self._proxy_var.set(value)
+        self._refresh_proxy_status(saved=True)
+
+    def _on_proxy_windows(self):
+        try:
+            config.set_proxy_mode('system')
+        except OSError:
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
         self._refresh_proxy_status(saved=True)
 
     def _on_proxy_clear(self):

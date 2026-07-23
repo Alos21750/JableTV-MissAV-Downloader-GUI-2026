@@ -1,10 +1,21 @@
 import ast
 import os
+import threading
+import time
 from pathlib import Path
 
 import gui_modern
 import jable_smalltool
 from subtitle_engine import SubtitleResult
+
+
+def _wait_until(predicate, timeout=2):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
 
 
 def test_smalltool_defers_subtitle_engine_until_download():
@@ -64,6 +75,10 @@ def test_modern_manager_runs_selected_subtitle_mode(monkeypatch, tmp_path):
 
     manager._run('https://jable.tv/videos/sample/', str(tmp_path), epoch=0)
 
+    assert _wait_until(
+        lambda: manager.subtitle_active_count == 0
+        and manager.subtitle_pending_count == 0
+        and manager.get_items()[0].state == '已下載')
     item = manager.get_items()[0]
     assert calls == [(str(video), 'ja')]
     assert item.state == '已下載'
@@ -85,10 +100,347 @@ def test_modern_keeps_video_and_surfaces_subtitle_failure(monkeypatch, tmp_path)
 
     manager._run('https://jable.tv/videos/sample/', str(tmp_path), epoch=0)
 
+    assert _wait_until(
+        lambda: manager.subtitle_active_count == 0
+        and manager.subtitle_pending_count == 0
+        and manager.get_items()[0].state == '已下載')
     item = manager.get_items()[0]
     assert item.state == '已下載'
     assert 'offline' in item.error
     assert os.path.isfile(video)
+
+
+def test_modern_download_slot_is_released_while_subtitles_run(
+        monkeypatch, tmp_path):
+    first_url = 'https://jable.tv/videos/first/'
+    second_url = 'https://jable.tv/videos/second/'
+    first_video = tmp_path / 'first.mp4'
+    second_video = tmp_path / 'second.mp4'
+    first_video.write_bytes(b'first')
+    second_video.write_bytes(b'second')
+
+    subtitle_started = threading.Event()
+    release_subtitle = threading.Event()
+    second_download_started = threading.Event()
+
+    class SequencedJob(FakeDownloadJob):
+        def __init__(self, video_path, download_started=None):
+            super().__init__(video_path)
+            self._download_started = download_started
+
+        def start_download(self):
+            if self._download_started:
+                self._download_started.set()
+            return super().start_download()
+
+    jobs = {
+        first_url: SequencedJob(first_video),
+        second_url: SequencedJob(second_video, second_download_started),
+    }
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite',
+        lambda url, _dest: jobs[url])
+
+    def slow_subtitles(path, _mode, progress_callback=None,
+                       cancel_check=None):
+        if path == str(first_video):
+            subtitle_started.set()
+            assert release_subtitle.wait(3)
+        return SubtitleResult((), ())
+
+    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_subtitles)
+    manager = gui_modern.DownloadManager(
+        max_concurrent=1, subtitle_mode_getter=lambda: 'ja')
+
+    manager.enqueue(first_url, str(tmp_path))
+    assert subtitle_started.wait(2)
+    manager.enqueue(second_url, str(tmp_path))
+    try:
+        assert second_download_started.wait(1), (
+            'the completed download kept its slot while subtitles were running')
+    finally:
+        release_subtitle.set()
+    assert _wait_until(
+        lambda: manager.active_count == 0
+        and manager.pending_count == 0
+        and manager.subtitle_active_count == 0
+        and manager.subtitle_pending_count == 0)
+
+
+def test_modern_pending_download_queue_advances_after_refactor(
+        monkeypatch, tmp_path):
+    first_url = 'https://jable.tv/videos/first/'
+    second_url = 'https://jable.tv/videos/second/'
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+
+    class BlockingJob(FakeDownloadJob):
+        def __init__(self, path, started, release=None):
+            super().__init__(path)
+            self.started = started
+            self.release = release
+
+        def start_download(self):
+            self.started.set()
+            if self.release:
+                assert self.release.wait(3)
+            return super().start_download()
+
+    jobs = {
+        first_url: BlockingJob(
+            tmp_path / 'first.mp4', first_started, release_first),
+        second_url: BlockingJob(tmp_path / 'second.mp4', second_started),
+    }
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite',
+        lambda url, _dest: jobs[url])
+    manager = gui_modern.DownloadManager(
+        max_concurrent=1, subtitle_mode_getter=lambda: 'none')
+
+    manager.enqueue(first_url, str(tmp_path))
+    assert first_started.wait(2)
+    manager.enqueue(second_url, str(tmp_path))
+    assert manager.active_count == 1
+    assert manager.pending_count == 1
+
+    release_first.set()
+    assert second_started.wait(2)
+    assert _wait_until(
+        lambda: manager.active_count == 0 and manager.pending_count == 0)
+    assert all(item.state == '已下載' for item in manager.get_items())
+
+
+def test_modern_subtitle_queue_is_serial_and_dedupes_inflight_urls(
+        monkeypatch, tmp_path):
+    urls = [
+        'https://jable.tv/videos/one/',
+        'https://jable.tv/videos/two/',
+        'https://jable.tv/videos/three/',
+    ]
+    paths = {
+        url: tmp_path / f'{index}.mp4'
+        for index, url in enumerate(urls)
+    }
+    for path in paths.values():
+        path.write_bytes(b'video')
+
+    lock = threading.Lock()
+    all_downloaded = threading.Event()
+    first_subtitle_started = threading.Event()
+    release_subtitle = threading.Event()
+    download_calls = []
+    subtitle_calls = []
+
+    class TrackedJob(FakeDownloadJob):
+        def __init__(self, url):
+            super().__init__(paths[url])
+            self.url = url
+
+        def start_download(self):
+            with lock:
+                download_calls.append(self.url)
+                if len(download_calls) == len(urls):
+                    all_downloaded.set()
+            return super().start_download()
+
+    jobs = {url: TrackedJob(url) for url in urls}
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite',
+        lambda url, _dest: jobs[url])
+
+    def serial_subtitles(path, _mode, progress_callback=None,
+                         cancel_check=None):
+        with lock:
+            subtitle_calls.append(path)
+            first = len(subtitle_calls) == 1
+        if first:
+            first_subtitle_started.set()
+            assert release_subtitle.wait(3)
+        return SubtitleResult((), ())
+
+    monkeypatch.setattr(gui_modern, 'generate_subtitles', serial_subtitles)
+    manager = gui_modern.DownloadManager(
+        max_concurrent=3, subtitle_mode_getter=lambda: 'ja')
+
+    for url in urls:
+        manager.enqueue(url, str(tmp_path))
+
+    assert first_subtitle_started.wait(2)
+    assert all_downloaded.wait(2)
+    assert _wait_until(
+        lambda: manager.active_count == 0
+        and manager.pending_count == 0
+        and manager.subtitle_active_count == 1
+        and manager.subtitle_pending_count == 2)
+    assert len(subtitle_calls) == 1
+
+    # Neither the active subtitle URL nor a queued subtitle URL may be
+    # downloaded again.
+    manager.enqueue(urls[0], str(tmp_path))
+    manager.enqueue(urls[1], str(tmp_path))
+    time.sleep(0.05)
+    assert sorted(download_calls) == sorted(urls)
+
+    release_subtitle.set()
+    assert _wait_until(
+        lambda: manager.subtitle_active_count == 0
+        and manager.subtitle_pending_count == 0)
+    assert len(subtitle_calls) == len(urls)
+    assert all(item.state == '已下載' for item in manager.get_items())
+
+
+def test_modern_cancel_all_cancels_queued_subtitles_and_blocks_stale_finish(
+        monkeypatch, tmp_path):
+    urls = [
+        'https://jable.tv/videos/first/',
+        'https://jable.tv/videos/second/',
+    ]
+    paths = {
+        url: tmp_path / f'{index}.mp4'
+        for index, url in enumerate(urls)
+    }
+    for path in paths.values():
+        path.write_bytes(b'video')
+    jobs = {url: FakeDownloadJob(paths[url]) for url in urls}
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite',
+        lambda url, _dest: jobs[url])
+
+    subtitle_started = threading.Event()
+    release_subtitle = threading.Event()
+    calls = []
+
+    def stubborn_subtitles(path, _mode, progress_callback=None,
+                           cancel_check=None):
+        calls.append(path)
+        subtitle_started.set()
+        assert release_subtitle.wait(3)
+        progress_callback('translate_zh', 55)
+        return SubtitleResult((), ())
+
+    monkeypatch.setattr(gui_modern, 'generate_subtitles', stubborn_subtitles)
+    manager = gui_modern.DownloadManager(
+        max_concurrent=2, subtitle_mode_getter=lambda: 'ja')
+    for url in urls:
+        manager.enqueue(url, str(tmp_path))
+
+    assert subtitle_started.wait(2)
+    assert _wait_until(lambda: manager.subtitle_pending_count == 1)
+    manager.cancel_all()
+
+    assert manager.active_count == 0
+    assert manager.pending_count == 0
+    assert manager.subtitle_active_count == 1
+    assert manager.subtitle_pending_count == 0
+    assert all(item.state == '已取消' for item in manager.get_items())
+    assert all(job._cancel_job for job in jobs.values())
+
+    release_subtitle.set()
+    assert _wait_until(lambda: manager.subtitle_active_count == 0)
+    assert len(calls) == 1
+    assert all(item.state == '已取消' for item in manager.get_items())
+    assert all(item.progress == 0 for item in manager.get_items())
+
+
+def test_modern_cancel_blocks_stale_download_progress(monkeypatch, tmp_path):
+    url = 'https://jable.tv/videos/stale-progress/'
+    video = tmp_path / 'stale-progress.mp4'
+    video.write_bytes(b'video')
+    download_started = threading.Event()
+    release_download = threading.Event()
+
+    class StubbornDownloadJob(FakeDownloadJob):
+        def start_download(self):
+            download_started.set()
+            assert release_download.wait(3)
+            if self._progress_callback:
+                self._progress_callback(7, 10, 2048)
+            return True
+
+    job = StubbornDownloadJob(video)
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'none')
+    manager.enqueue(url, str(tmp_path))
+
+    assert download_started.wait(2)
+    manager.cancel_all()
+    item = manager.get_items()[0]
+    assert item.state == '已取消'
+    assert item.progress == 0
+    assert item.speed == ''
+
+    release_download.set()
+    assert _wait_until(lambda: manager.active_count == 0)
+    assert item.state == '已取消'
+    assert item.progress == 0
+    assert item.speed == ''
+
+
+def test_modern_cancellation_dominates_stale_final_completion(tmp_path):
+    download_url = 'https://jable.tv/videos/stale-download-finish/'
+    download_manager = gui_modern.DownloadManager()
+    download_item = download_manager.add_item(
+        download_url, state='下載中')
+    download_task = gui_modern._DownloadTask(
+        download_url, str(tmp_path), download_manager._cancel_epoch)
+    with download_manager._lock:
+        download_manager._active[download_url] = download_task
+
+    download_manager.cancel_all(cleanup=False)
+    download_manager._complete_download(
+        download_task, '已下載', progress=100)
+
+    assert download_item.state == '已取消'
+    assert download_item.progress == 0
+
+    subtitle_url = 'https://jable.tv/videos/stale-subtitle-finish/'
+    subtitle_manager = gui_modern.DownloadManager()
+    subtitle_item = subtitle_manager.add_item(
+        subtitle_url, state='字幕翻譯中')
+    subtitle_task = gui_modern._DownloadTask(
+        subtitle_url, str(tmp_path), subtitle_manager._cancel_epoch)
+    with subtitle_manager._lock:
+        subtitle_manager._subtitle_active[subtitle_url] = subtitle_task
+
+    subtitle_manager.cancel_all(cleanup=False)
+    subtitle_manager._complete_subtitle(
+        subtitle_task, '已下載', progress=100)
+
+    assert subtitle_item.state == '已取消'
+    assert subtitle_item.progress == 0
+
+
+def test_modern_remove_active_subtitle_does_not_restore_removed_item(
+        monkeypatch, tmp_path):
+    url = 'https://jable.tv/videos/remove/'
+    video = tmp_path / 'remove.mp4'
+    video.write_bytes(b'video')
+    job = FakeDownloadJob(video)
+    monkeypatch.setattr(
+        gui_modern.M3U8Sites, 'CreateSite', lambda _url, _dest: job)
+
+    subtitle_started = threading.Event()
+    release_subtitle = threading.Event()
+
+    def slow_subtitles(*_args, **_kwargs):
+        subtitle_started.set()
+        assert release_subtitle.wait(3)
+        return SubtitleResult((), ())
+
+    monkeypatch.setattr(gui_modern, 'generate_subtitles', slow_subtitles)
+    manager = gui_modern.DownloadManager(subtitle_mode_getter=lambda: 'ja')
+    manager.enqueue(url, str(tmp_path))
+
+    assert subtitle_started.wait(2)
+    manager.remove_item(url)
+    assert manager.get_items() == []
+    assert job._cancel_job is True
+
+    release_subtitle.set()
+    assert _wait_until(lambda: manager.subtitle_active_count == 0)
+    assert manager.get_items() == []
 
 
 def test_smalltool_runs_subtitles_before_marking_seen(monkeypatch, tmp_path):

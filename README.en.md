@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.31 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## Pick the right tool
@@ -57,17 +57,17 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 | Capability | Current behavior |
 |---|---|
 | Download queue | Per-item state, progress, and speed; queue persistence; retry one failed item |
-| Concurrency | 2 jobs by default, up to 10 |
+| Concurrency | 2 video downloads by default, up to 32; AI subtitles run in a separate background queue without occupying download slots |
 | Quality preference | Highest, 1080p, 720p, 480p, 360p, or Lowest; actual variants depend on the source |
 | AI subtitles | Off, Japanese, English, Traditional Chinese, or all three as selectable sidecar SRT files |
 | URL input | Clipboard detection, manual paste, and text/CSV batch import |
-| Proxy | App-scoped HTTP, HTTPS, SOCKS4, and SOCKS5; no change to the Windows global proxy |
+| Proxy | Custom HTTP, HTTPS, SOCKS4, or SOCKS5, or the enabled Windows manual ProxyServer; no change to the Windows global proxy |
 | Updates | Background GitHub Release check; the user confirms before installing an update |
 
 ## SmallTool: monitor categories automatically
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.31 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.32 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
 </p>
 
 1. Choose a destination. If left unset, SmallTool creates `tmp` beside the executable.
@@ -161,7 +161,7 @@ When opening a [GitHub Issue](https://github.com/Alos21750/JableTV-MissAV-Downlo
 - For a crash, attach `crash_log.txt` or `crash_native.log` from beside the executable.
 - Never upload cookies, proxy credentials, tokens, or other private values.
 
-If you need a proxy, configure it in Modern Settings or at the top of SmallTool. Both GUIs share the setting, and it applies only to this application.
+If you need a proxy, choose a custom proxy, Windows system proxy, or Direct in Modern Settings or at the top of SmallTool. Both GUIs share the setting and it applies only to this application. Windows mode currently supports an enabled manual ProxyServer. A PAC configuration URL is reported but not executed; WPAD auto-detection is not yet supported.
 
 ## Stars and project activity
 

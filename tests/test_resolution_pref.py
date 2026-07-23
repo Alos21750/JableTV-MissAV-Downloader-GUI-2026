@@ -176,3 +176,25 @@ def test_config_subtitle_mode_round_trip_and_validation(tmp_path, monkeypatch):
 
     with open(path, 'r', encoding='utf-8') as handle:
         assert json.load(handle)['subtitle_mode'] == 'none'
+
+
+def test_download_concurrency_round_trip_clamps_and_preserves_preferences(
+        tmp_path, monkeypatch):
+    path = tmp_path / 'ui_prefs.json'
+    monkeypatch.setattr(config, '_ui_prefs_path', lambda: str(path))
+
+    config.set_theme('dark')
+    assert config.get_download_concurrency() == 2
+    assert config.set_download_concurrency('12') == 12
+    assert config.get_download_concurrency() == 12
+    assert config.set_download_concurrency(0) == 1
+    assert config.set_download_concurrency(999) == 32
+
+    stored = json.loads(path.read_text(encoding='utf-8'))
+    assert stored['theme'] == 'dark'
+    assert stored['download_concurrency'] == 32
+
+    path.write_text(
+        json.dumps({'download_concurrency': 'not-a-number'}),
+        encoding='utf-8')
+    assert config.get_download_concurrency() == 2

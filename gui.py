@@ -40,7 +40,7 @@ FONT_TITLE = ('Microsoft YaHei', 14, 'bold')
 FONT_SEC_TITLE = ('Microsoft YaHei', 11, 'bold')
 
 DEFAULT_CONCURRENT = 2
-MAX_CONCURRENT = 10
+MAX_CONCURRENT = 32
 
 
 def gui_main(url, dest):

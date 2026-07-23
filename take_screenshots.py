@@ -82,6 +82,8 @@ def capture_modern():
     config.get_ui_lang = lambda: 'en'
     config.get_theme = lambda: 'dark'
     config.get_proxy_url = lambda: ''
+    config.get_proxy_mode = lambda: 'direct'
+    config.get_download_concurrency = lambda: 2
     gui_modern.CSV_PATH = os.path.join(
         tempfile.gettempdir(), 'jable_readme_empty_queue.csv')
     try:
@@ -107,6 +109,8 @@ def capture_smalltool():
     config.get_ui_lang = lambda: 'zh'
     config.get_theme = lambda: 'dark'
     config.get_proxy_url = lambda: ''
+    config.get_proxy_mode = lambda: 'direct'
+    config.get_download_concurrency = lambda: 2
     jable_smalltool.load_config = lambda: {
         'output_folder': r'.\tmp',
         'baseline_date': jable_smalltool.DEFAULT_BASELINE_DATE,

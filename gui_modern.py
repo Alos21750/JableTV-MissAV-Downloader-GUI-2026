@@ -45,7 +45,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.31'
+APP_VERSION = '2.5.32'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -55,7 +55,7 @@ except Exception:
         pass
 
 DEFAULT_CONCURRENT = 2
-MAX_CONCURRENT = 10
+MAX_CONCURRENT = 32
 MAX_VISIBLE_ROWS = 200
 ROW_BUILD_BUDGET = 40
 MAX_PERSIST_ROWS = 1000
@@ -126,21 +126,40 @@ class DownloadItem:
         self.dest = dest or ''
 
 
+class _DownloadTask:
+    """One URL moving through the download and optional subtitle queues."""
+
+    __slots__ = (
+        'url', 'dest', 'epoch', 'job', 'subtitle_mode', 'cancelled',
+    )
+
+    def __init__(self, url: str, dest: str, epoch: int):
+        self.url = url
+        self.dest = dest
+        self.epoch = epoch
+        self.job = None
+        self.subtitle_mode = 'none'
+        self.cancelled = threading.Event()
+
+
 class DownloadManager:
-    """Thread-safe download manager with configurable concurrency."""
+    """Thread-safe manager with separate download and subtitle queues."""
 
     def __init__(self, on_update=None, max_concurrent: int = DEFAULT_CONCURRENT,
                  subtitle_mode_getter=None):
         self._on_update = on_update
         self._subtitle_mode_getter = subtitle_mode_getter or config.get_subtitle_pref
-        self._pending: list[tuple[str, str]] = []
-        self._active: dict[str, object] = {}
+        self._pending: list[_DownloadTask] = []
+        self._active: dict[str, _DownloadTask] = {}
+        self._subtitle_pending: list[_DownloadTask] = []
+        self._subtitle_active: dict[str, _DownloadTask] = {}
         self._items: dict[str, DownloadItem] = {}
         # RLock: enqueue() and cancel_all() call _set_state() while holding
         # the lock — a plain Lock would deadlock the caller (often the main
         # GUI thread, freezing the app).
         self._lock = threading.RLock()
-        self._max_concurrent = max_concurrent
+        self._max_concurrent = max(
+            1, min(int(max_concurrent), MAX_CONCURRENT))
         self._prep_sem = threading.Semaphore(1)
         self._cancel_epoch = 0
 
@@ -151,7 +170,7 @@ class DownloadManager:
     @max_concurrent.setter
     def max_concurrent(self, value: int):
         self._max_concurrent = max(1, min(value, MAX_CONCURRENT))
-        for _ in range(value):
+        for _ in range(self._max_concurrent):
             self._try_next()
 
     def add_item(self, url: str, name: str = '', state: str = '', dest: str = ''):
@@ -169,66 +188,59 @@ class DownloadManager:
     def remove_item(self, url: str):
         with self._lock:
             self._items.pop(url, None)
-            self._pending = [(u, d) for u, d in self._pending if u != url]
-            job = self._active.pop(url, None)
-        if job and hasattr(job, 'cancel_download'):
-            try:
-                job.cancel_download()
-            except Exception:
-                pass
-            if hasattr(job, 'cleanup_temp'):
-                try:
-                    job.cleanup_temp()
-                except Exception:
-                    pass
+            removed = [task for task in self._pending if task.url == url]
+            self._pending = [task for task in self._pending if task.url != url]
+            removed_subtitles = [
+                task for task in self._subtitle_pending if task.url == url]
+            self._subtitle_pending = [
+                task for task in self._subtitle_pending if task.url != url]
+            active = self._active.get(url)
+            active_subtitle = self._subtitle_active.get(url)
+            contexts = removed + removed_subtitles
+            if active is not None:
+                contexts.append(active)
+            if active_subtitle is not None:
+                contexts.append(active_subtitle)
+            for task in contexts:
+                task.cancelled.set()
+        self._cancel_contexts(contexts)
+        if removed_subtitles:
+            self._try_next_subtitle()
 
     def enqueue(self, url: str, dest: str):
+        start_task = None
         with self._lock:
+            if self._url_inflight_locked(url):
+                return
             item = self._items.get(url)
             if item:
                 item.dest = dest or item.dest
             else:
                 self._items[url] = DownloadItem(url, dest=dest)
-            if url in self._active:
-                return
-            if any(u == url for u, _ in self._pending):
-                return
+            task = _DownloadTask(url, dest, self._cancel_epoch)
             if len(self._active) < self._max_concurrent:
-                epoch = self._cancel_epoch
-                self._active[url] = None
-                threading.Thread(target=self._run, args=(url, dest),
-                                 kwargs={'epoch': epoch},
-                                 daemon=True).start()
+                self._active[url] = task
+                start_task = task
             else:
-                self._pending.append((url, dest))
+                self._pending.append(task)
                 self._set_state(url, '等待中')
+        if start_task is not None:
+            self._start_download_thread(start_task)
 
     def cancel_all(self, cleanup: bool = True):
         with self._lock:
             self._cancel_epoch += 1
-            for u, _ in self._pending:
-                self._set_state(u, '已取消')
+            pending = list(self._pending)
+            pending_subtitles = list(self._subtitle_pending)
             self._pending.clear()
-            jobs = list(self._active.items())
-        for url, job in jobs:
-            if job and hasattr(job, 'cancel_download'):
-                try:
-                    job.cancel_download(cleanup=cleanup)
-                except TypeError:
-                    try:
-                        job.cancel_download()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                if cleanup and hasattr(job, 'cleanup_temp'):
-                    try:
-                        job.cleanup_temp()
-                    except Exception:
-                        pass
-            self._set_state(url, '已取消')
-        with self._lock:
-            self._active.clear()
+            self._subtitle_pending.clear()
+            active = list(self._active.values())
+            active_subtitles = list(self._subtitle_active.values())
+            contexts = pending + pending_subtitles + active + active_subtitles
+            for task in contexts:
+                task.cancelled.set()
+                self._set_state(task.url, '已取消')
+        self._cancel_contexts(contexts, cleanup=cleanup)
 
     def clear_all(self):
         self.cancel_all()
@@ -236,40 +248,40 @@ class DownloadManager:
             self._items.clear()
 
     def _run(self, url: str, dest: str, epoch: int | None = None):
-        self._set_state(url, '準備中')
-        if epoch is None:
-            with self._lock:
-                epoch = self._cancel_epoch
+        """Compatibility entry point used by focused tests and older callers."""
+        with self._lock:
+            task = self._active.get(url)
+            if task is None:
+                task = _DownloadTask(
+                    url, dest, self._cancel_epoch if epoch is None else epoch)
+                self._active[url] = task
+        self._run_download(task)
+
+    def _run_download(self, task: _DownloadTask):
+        url = task.url
+        self._set_context_state(task, '準備中')
         try:
             self._prep_sem.acquire()
             try:
-                job = M3U8Sites.CreateSite(url, dest)
-            except MirrorsBlockedError:
+                if self._context_cancelled(task):
+                    self._complete_download(task, '已取消')
+                    return
+                job = M3U8Sites.CreateSite(url, task.dest)
                 with self._lock:
-                    self._active.pop(url, None)
-                self._set_state(url, '封鎖/解析失敗', error=ERR_BLOCKED)
-                self._try_next()
-                return
+                    if self._active.get(url) is task:
+                        task.job = job
             finally:
                 self._prep_sem.release()
-            with self._lock:
-                cancelled = (self._cancel_epoch != epoch)
-                if cancelled:
-                    self._active.pop(url, None)
-            if cancelled:
+            if self._context_cancelled(task):
                 if job is not None:
                     try:
                         job._cancel_job = True
                     except Exception:
                         pass
-                self._set_state(url, '已取消')
-                self._try_next()
+                self._complete_download(task, '已取消')
                 return
             if not job:
-                with self._lock:
-                    self._active.pop(url, None)
-                self._set_state(url, '網址錯誤')
-                self._try_next()
+                self._complete_download(task, '網址錯誤')
                 return
             if not job.is_url_vaildate():
                 err = getattr(job, '_last_error', None)
@@ -277,91 +289,221 @@ class DownloadManager:
                     error = ERR_BLOCKED
                 else:
                     error = str(err) if err else T('parse_failed_short')
-                with self._lock:
-                    self._active.pop(url, None)
-                self._set_state(url, '封鎖/解析失敗', error=error)
-                self._try_next()
+                self._complete_download(
+                    task, '封鎖/解析失敗', error=error)
                 return
-            with self._lock:
-                cancelled = (self._cancel_epoch != epoch)
-                if not cancelled:
-                    self._active[url] = job
-                else:
-                    self._active.pop(url, None)
-            if cancelled:
+            if self._context_cancelled(task):
                 try:
                     job._cancel_job = True
                 except Exception:
                     pass
-                self._set_state(url, '已取消')
-                self._try_next()
+                self._complete_download(task, '已取消')
                 return
             name = job.target_name() or ''
-            self._set_state(url, '下載中', name=name)
-            job._progress_callback = lambda d, t, s: self._on_progress(url, d, t, s)
-            with self._lock:
-                cancelled = (self._cancel_epoch != epoch)
-                if cancelled:
-                    self._active.pop(url, None)
-            if cancelled:
+            self._set_context_state(task, '下載中', name=name)
+            job._progress_callback = (
+                lambda d, t, s: self._on_context_progress(task, d, t, s))
+            if self._context_cancelled(task):
                 try:
                     job._cancel_job = True
                 except Exception:
                     pass
-                self._set_state(url, '已取消')
-                self._try_next()
+                self._complete_download(task, '已取消')
                 return
             ok = job.start_download()
             if ok is False and not job._cancel_job:
                 raise Exception(T('parse_failed_short'))
-            subtitle_warning = ''
-            if not job._cancel_job:
-                mode = normalize_subtitle_mode(self._subtitle_mode_getter())
-                if mode != 'none':
-                    def _subtitle_progress(stage, percent):
-                        state = _SUBTITLE_STATE_BY_STAGE.get(stage)
-                        if state:
-                            self._set_state(
-                                url, state,
-                                progress=percent if percent is not None else -1)
-
-                    try:
-                        generate_subtitles(
-                            job._get_video_savename(), mode,
-                            progress_callback=_subtitle_progress,
-                            cancel_check=lambda: bool(job._cancel_job),
-                        )
-                    except SubtitleCancelled:
-                        job._cancel_job = True
-                    except Exception as exc:
-                        subtitle_warning = T('subtitle_failed', error=str(exc))
-            with self._lock:
-                self._active.pop(url, None)
-            if job._cancel_job:
-                self._set_state(url, '已取消')
-            else:
-                self._set_state(
-                    url, '已下載', progress=100,
-                    error=subtitle_warning if subtitle_warning else None)
+            if job._cancel_job or self._context_cancelled(task):
+                self._complete_download(task, '已取消')
+                return
+            mode = normalize_subtitle_mode(self._subtitle_mode_getter())
+            if mode != 'none':
+                if self._queue_subtitle(task, mode):
+                    return
+                if self._context_cancelled(task):
+                    self._complete_download(task, '已取消')
+                    return
+            self._complete_download(task, '已下載', progress=100)
         except Exception as exc:
             print(f'[下載失敗] {url}\n  {exc}', flush=True)
-            with self._lock:
-                self._active.pop(url, None)
-            if isinstance(exc, MirrorsBlockedError):
-                self._set_state(url, '封鎖/解析失敗', error=ERR_BLOCKED)
+            if self._context_cancelled(task):
+                self._complete_download(task, '已取消')
+            elif isinstance(exc, MirrorsBlockedError):
+                self._complete_download(
+                    task, '封鎖/解析失敗', error=ERR_BLOCKED)
             else:
-                self._set_state(url, '未完成', error=str(exc))
-        self._try_next()
+                self._complete_download(task, '未完成', error=str(exc))
 
     def _try_next(self):
+        task = None
         with self._lock:
-            if not self._pending or len(self._active) >= self._max_concurrent:
+            while self._pending and len(self._active) < self._max_concurrent:
+                candidate = self._pending.pop(0)
+                if (candidate.cancelled.is_set() or
+                        candidate.epoch != self._cancel_epoch):
+                    candidate.cancelled.set()
+                    self._set_state(candidate.url, '已取消')
+                    continue
+                self._active[candidate.url] = candidate
+                task = candidate
+                break
+        if task is not None:
+            self._start_download_thread(task)
+
+    def _queue_subtitle(self, task: _DownloadTask, mode: str) -> bool:
+        with self._lock:
+            if (self._active.get(task.url) is not task or
+                    self._context_cancelled_locked(task)):
+                return False
+            task.subtitle_mode = mode
+            self._active.pop(task.url, None)
+            self._subtitle_pending.append(task)
+            self._set_state(task.url, '字幕準備中', progress=0)
+        # The video download slot is free before any subtitle work starts.
+        self._try_next()
+        self._try_next_subtitle()
+        return True
+
+    def _try_next_subtitle(self):
+        task = None
+        with self._lock:
+            if self._subtitle_active:
                 return
-            url, dest = self._pending.pop(0)
-            epoch = self._cancel_epoch
-            self._active[url] = None
-        threading.Thread(target=self._run, args=(url, dest),
-                         kwargs={'epoch': epoch}, daemon=True).start()
+            while self._subtitle_pending:
+                candidate = self._subtitle_pending.pop(0)
+                if (candidate.cancelled.is_set() or
+                        candidate.epoch != self._cancel_epoch):
+                    candidate.cancelled.set()
+                    self._set_state(candidate.url, '已取消')
+                    continue
+                self._subtitle_active[candidate.url] = candidate
+                task = candidate
+                break
+        if task is not None:
+            threading.Thread(
+                target=self._run_subtitle, args=(task,), daemon=True).start()
+
+    def _run_subtitle(self, task: _DownloadTask):
+        job = task.job
+        warning = ''
+
+        def _subtitle_progress(stage, percent):
+            state = _SUBTITLE_STATE_BY_STAGE.get(stage)
+            if state:
+                self._set_context_state(
+                    task, state,
+                    progress=percent if percent is not None else -1)
+
+        try:
+            if self._context_cancelled(task):
+                raise SubtitleCancelled()
+            generate_subtitles(
+                job._get_video_savename(), task.subtitle_mode,
+                progress_callback=_subtitle_progress,
+                cancel_check=lambda: (
+                    self._context_cancelled(task) or bool(job._cancel_job)),
+            )
+        except SubtitleCancelled:
+            task.cancelled.set()
+        except Exception as exc:
+            warning = T('subtitle_failed', error=str(exc))
+
+        if (task.cancelled.is_set() or self._context_cancelled(task) or
+                bool(getattr(job, '_cancel_job', False))):
+            self._complete_subtitle(task, '已取消')
+        else:
+            self._complete_subtitle(
+                task, '已下載', progress=100,
+                error=warning if warning else None)
+
+    def _start_download_thread(self, task: _DownloadTask):
+        threading.Thread(
+            target=self._run_download, args=(task,), daemon=True).start()
+
+    def _url_inflight_locked(self, url: str) -> bool:
+        return (
+            url in self._active
+            or url in self._subtitle_active
+            or any(task.url == url for task in self._pending)
+            or any(task.url == url for task in self._subtitle_pending)
+        )
+
+    def _context_inflight_locked(self, task: _DownloadTask) -> bool:
+        return (
+            self._active.get(task.url) is task
+            or self._subtitle_active.get(task.url) is task
+            or any(candidate is task for candidate in self._pending)
+            or any(candidate is task for candidate in self._subtitle_pending)
+        )
+
+    def _context_cancelled_locked(self, task: _DownloadTask) -> bool:
+        return (
+            task.cancelled.is_set()
+            or task.epoch != self._cancel_epoch
+            or not self._context_inflight_locked(task)
+        )
+
+    def _context_cancelled(self, task: _DownloadTask) -> bool:
+        with self._lock:
+            return self._context_cancelled_locked(task)
+
+    def _set_context_state(self, task: _DownloadTask, state: str,
+                           name: str = '', progress: int = -1, error=None):
+        with self._lock:
+            if self._context_cancelled_locked(task):
+                return
+            self._set_state(
+                task.url, state, name=name, progress=progress, error=error)
+
+    def _complete_download(self, task: _DownloadTask, state: str,
+                           progress: int = -1, error=None):
+        with self._lock:
+            if self._active.get(task.url) is not task:
+                return
+            if self._context_cancelled_locked(task) and state != '已取消':
+                state, progress, error = '已取消', -1, None
+            self._set_state(
+                task.url, state, progress=progress, error=error)
+            self._active.pop(task.url, None)
+        self._try_next()
+
+    def _complete_subtitle(self, task: _DownloadTask, state: str,
+                           progress: int = -1, error=None):
+        with self._lock:
+            if self._subtitle_active.get(task.url) is not task:
+                return
+            if self._context_cancelled_locked(task) and state != '已取消':
+                state, progress, error = '已取消', -1, None
+            self._set_state(
+                task.url, state, progress=progress, error=error)
+            self._subtitle_active.pop(task.url, None)
+        self._try_next_subtitle()
+
+    @staticmethod
+    def _cancel_contexts(contexts, cleanup: bool = True):
+        seen = set()
+        for task in contexts:
+            if id(task) in seen:
+                continue
+            seen.add(id(task))
+            task.cancelled.set()
+            job = task.job
+            if not job or not hasattr(job, 'cancel_download'):
+                continue
+            try:
+                job.cancel_download(cleanup=cleanup)
+            except TypeError:
+                try:
+                    job.cancel_download()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            if cleanup and hasattr(job, 'cleanup_temp'):
+                try:
+                    job.cleanup_temp()
+                except Exception:
+                    pass
 
     def _set_state(self, url: str, state: str, name: str = '', progress: int = -1, error=None):
         with self._lock:
@@ -390,6 +532,14 @@ class DownloadManager:
             if item:
                 item.progress = pct
                 item.speed = spd
+
+    def _on_context_progress(self, task: _DownloadTask, done: int,
+                             total: int, speed_bps: float):
+        with self._lock:
+            if (self._active.get(task.url) is not task or
+                    self._context_cancelled_locked(task)):
+                return
+            self._on_progress(task.url, done, total, speed_bps)
 
     def save_csv(self, path: str):
         with self._lock:
@@ -458,6 +608,16 @@ class DownloadManager:
     def pending_count(self) -> int:
         with self._lock:
             return len(self._pending)
+
+    @property
+    def subtitle_active_count(self) -> int:
+        with self._lock:
+            return len(self._subtitle_active)
+
+    @property
+    def subtitle_pending_count(self) -> int:
+        with self._lock:
+            return len(self._subtitle_pending)
 
 
 # ── Browse helper ────────────────────────────────────────────────────
@@ -590,7 +750,8 @@ class ModernApp(ctk.CTk):
         self._update_now_btn = None
 
         # Download manager
-        self._dlmgr = DownloadManager(max_concurrent=DEFAULT_CONCURRENT)
+        self._dlmgr = DownloadManager(
+            max_concurrent=config.get_download_concurrency())
         if not os.path.exists(CSV_PATH):
             old_csv = os.path.join(os.getcwd(), 'JableTV.csv')
             if (os.path.exists(old_csv) and
@@ -1653,15 +1814,14 @@ class ModernApp(ctk.CTk):
                      font=(ui_font(), 12, 'bold'), width=116,
                      anchor='w').pack(side='left')
         self._conc_var = ctk.StringVar(value=str(self._dlmgr.max_concurrent))
-        ctk.CTkOptionMenu(row_conc,
-                          values=[str(i) for i in range(1, MAX_CONCURRENT + 1)],
-                          variable=self._conc_var,
-                          command=self._on_conc_change, width=80, height=34,
-                          corner_radius=8,
-                          fg_color=BG_INPUT, button_color=BORDER_HOVER,
-                          button_hover_color=ACCENT, text_color=TEXT_PRI,
-                          dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
-                          dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
+        self._conc_entry = ctk.CTkEntry(
+            row_conc, textvariable=self._conc_var, width=80, height=34,
+            corner_radius=8, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, justify='center')
+        self._conc_entry.pack(side='left', padx=10)
+        self._conc_entry.bind('<Return>', self._on_conc_change)
+        self._conc_entry.bind('<FocusOut>', self._on_conc_change)
         ctk.CTkLabel(row_conc, text=T('max_n', n=MAX_CONCURRENT),
                      text_color=TEXT_DIM,
                      font=(ui_font(), 10)).pack(side='left')
@@ -1745,6 +1905,12 @@ class ModernApp(ctk.CTk):
             corner_radius=8, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color=WHITE, command=self._on_proxy_save).pack(
                 side='left', padx=(126, 6))
+        ctk.CTkButton(
+            proxy_actions, text=T('proxy_windows'), width=86, height=34,
+            corner_radius=8, fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI,
+            command=self._on_proxy_windows).pack(side='left', padx=(0, 6))
         ctk.CTkButton(
             proxy_actions, text=T('proxy_clear'), width=70, height=34,
             corner_radius=8, fg_color='transparent', border_width=1,
@@ -2570,12 +2736,24 @@ class ModernApp(ctk.CTk):
         self._cf_ua_var.set(ov.get('ua', ''))
 
     def _refresh_proxy_status(self, saved=False):
-        enabled = bool(config.get_proxy_url())
-        text = T('proxy_enabled') if enabled else T('proxy_disabled')
+        mode = config.get_proxy_mode()
+        if mode == 'manual' and config.get_proxy_url():
+            text, color = T('proxy_enabled'), SUCCESS
+        elif mode == 'system':
+            _display_url, status = config.refresh_system_proxy()
+            if status == 'detected':
+                text, color = T('proxy_windows_enabled'), SUCCESS
+            elif status == 'pac':
+                text, color = T('proxy_windows_pac'), WARNING
+            elif status == 'invalid':
+                text, color = T('proxy_windows_invalid'), ERROR_C
+            else:
+                text, color = T('proxy_windows_missing'), WARNING
+        else:
+            text, color = T('proxy_disabled'), TEXT_DIM
         if saved:
             text = f"{T('proxy_saved')} · {text}"
-        self._proxy_status_lbl.configure(
-            text=text, text_color=SUCCESS if enabled else TEXT_DIM)
+        self._proxy_status_lbl.configure(text=text, text_color=color)
 
     def _on_proxy_save(self):
         try:
@@ -2585,6 +2763,15 @@ class ModernApp(ctk.CTk):
                 text=T('proxy_invalid'), text_color=ERROR_C)
             return
         self._proxy_var.set(value)
+        self._refresh_proxy_status(saved=True)
+
+    def _on_proxy_windows(self):
+        try:
+            config.set_proxy_mode('system')
+        except OSError:
+            self._proxy_status_lbl.configure(
+                text=T('proxy_invalid'), text_color=ERROR_C)
+            return
         self._refresh_proxy_status(saved=True)
 
     def _on_proxy_clear(self):
@@ -2641,8 +2828,15 @@ class ModernApp(ctk.CTk):
     def _on_subtitle_change(self, val):
         config.set_subtitle_pref(self._subtitle_pref_from_label(val))
 
-    def _on_conc_change(self, val):
-        self._dlmgr.max_concurrent = int(val)
+    def _on_conc_change(self, _event=None):
+        try:
+            requested = int(self._conc_var.get().strip())
+        except (AttributeError, TypeError, ValueError):
+            self._conc_var.set(str(self._dlmgr.max_concurrent))
+            return
+        value = config.set_download_concurrency(requested)
+        self._dlmgr.max_concurrent = value
+        self._conc_var.set(str(value))
 
     def _pick_dest(self):
         d = filedialog.askdirectory()
@@ -2850,6 +3044,12 @@ class ModernApp(ctk.CTk):
                 parts.append(f'{state_label("下載中")} {a}/{self._dlmgr.max_concurrent}')
             if p:
                 parts.append(f'{state_label("等待中")} {p}')
+            subtitle_active = self._dlmgr.subtitle_active_count
+            subtitle_pending = self._dlmgr.subtitle_pending_count
+            if subtitle_active or subtitle_pending:
+                parts.append(T(
+                    'subtitle_queue_status',
+                    active=subtitle_active, pending=subtitle_pending))
             done = sum(1 for i in items if i.state == '已下載')
             if done:
                 parts.append(f'{state_label("已下載")} {done}')

@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.31 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## 先選一個工具
@@ -57,17 +57,17 @@
 | 能力 | 現行行為 |
 |---|---|
 | 下載佇列 | 每項顯示狀態、進度與速度；佇列會保存，失敗項目可單獨重試 |
-| 並行下載 | 預設 2，最多 10 個工作 |
+| 並行下載 | 預設 2，最多 32 個影片下載；AI 字幕使用獨立背景佇列，不占用下載名額 |
 | 畫質偏好 | 最高、1080p、720p、480p、360p、最低；實際可用畫質依來源而定 |
 | AI 字幕 | 不產生、日文、英文、繁中或三語；輸出為播放器可切換的同名 SRT |
 | 網址操作 | 剪貼簿偵測、手動貼上、文字／CSV 批次匯入 |
-| Proxy | 程式內 HTTP、HTTPS、SOCKS4、SOCKS5；不修改 Windows 全域代理 |
+| Proxy | 可用自訂 HTTP、HTTPS、SOCKS4、SOCKS5，或跟隨 Windows 已啟用的手動 ProxyServer；不修改 Windows 全域代理 |
 | 更新 | 背景檢查 GitHub Release，有新版時由使用者確認後更新 |
 
 ## SmallTool：依分類自動追新
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.31 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority and AI subtitles" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.32 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority and AI subtitles" />
 </p>
 
 1. 選擇儲存位置；若不選，會在執行檔旁自動建立 `tmp`。
@@ -161,7 +161,7 @@ Docker 是無介面、執行完即結束的下載工作，不包含 Modern 或 S
 - 若程式閃退，附上執行檔旁的 `crash_log.txt` 或 `crash_native.log`。
 - 不要上傳 Cookie、Proxy 帳密、Token 或其他私密值。
 
-需要 Proxy 時，可在 Modern「設定」或 SmallTool 頂部輸入；設定由兩個 GUI 共用，只作用於本程式。
+需要 Proxy 時，可在 Modern「設定」或 SmallTool 頂部選擇自訂代理、Windows 系統代理或停用。兩個 GUI 共用設定，且只作用於本程式；Windows 模式目前支援已啟用的手動 ProxyServer。PAC 設定網址會提示但不執行，WPAD 自動偵測尚未支援。
 
 ## Stars 與專案活動
 
