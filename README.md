@@ -5,7 +5,8 @@
 <h1 align="center">JableTV Downloader</h1>
 
 <p align="center">
-  JableTV、MissAV、SupJav 的桌面下載器與自動監控工具。<br />
+  JableTV、MissAV、SupJav 的桌面下載器與自動監控工具，內建 <strong>AI 生成字幕</strong>。<br />
+  <strong>下載完成，自動補上 AI 字幕：</strong>日語音軌在本機辨識，可輸出日文、英文與繁中 SRT。<br />
   想自己瀏覽挑片，用 <strong>Modern</strong>；想依分類持續追新，用 <strong>SmallTool</strong>。
 </p>
 
@@ -24,6 +25,9 @@
   ·
   <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest">查看最新版本</a>
 </p>
+
+> [!TIP]
+> **AI 字幕不用 API Key，也不用上傳影音。** Modern 與 SmallTool 可在影片下載完成後，自動建立播放器可切換的 `.ja.srt`、`.en.srt`、`.zh-TW.srt`，且不修改 MP4；英文／繁中翻譯只會傳送辨識後的文字。
 
 <p align="center">
   <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
@@ -87,11 +91,12 @@ SmallTool 每 24 小時自動檢查，也可按「立即檢查」。同一番號
 
 下載記錄優先存於執行檔旁的 `.Jable_smalltool`；若該位置不可寫，會改用 `%APPDATA%\JableTV Downloader\smalltool`。
 
-## AI 生成字幕
+## AI 字幕：下載完成，自動補上日／英／繁中 SRT
 
-- 兩個 Windows GUI 都可在下載前選擇 **不產生／日文／英文／繁中／三語**。完成後會在影片旁建立 `.ja.srt`、`.en.srt`、`.zh-TW.srt`，不修改原始 MP4。
+- 兩個 Windows GUI 都可在下載前選擇 **不產生／日文／英文／繁中／三語**。影片完成後會自動在旁邊建立 `.ja.srt`、`.en.srt`、`.zh-TW.srt`，不修改原始 MP4，也不需另外設定 API Key。
 - 日文辨識使用官方 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) 在本機執行；首次使用會下載經 SHA-256 驗證、約 60 MB 的 [multilingual base-q5_1 模型](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base-q5_1.bin) 與[官方 Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main)。目前以日語音軌為來源，VAD 會略過沒有語音的區段。
 - 英文與繁中只把辨識後的字幕文字送到免金鑰 Google 翻譯端點，影片與音訊不會上傳。這條免費路徑沒有服務保證；失敗時影片與日文 SRT 仍會保留，介面會明確顯示並允許重試。
+- Modern 的影片下載與字幕處理使用獨立佇列；字幕逐部在背景產生，不會占用 1–32 個影片下載名額。
 - 產生速度取決於 CPU、影片長度與實際語音比例；三語共用同一次本機語音辨識。
 
 ## 支援範圍

@@ -5,7 +5,8 @@
 <h1 align="center">JableTV Downloader</h1>
 
 <p align="center">
-  Desktop downloading and category monitoring for JableTV, MissAV, and SupJav.<br />
+  Desktop downloading and category monitoring for JableTV, MissAV, and SupJav, with <strong>built-in AI subtitles</strong>.<br />
+  <strong>Download the video, then automatically add AI subtitles:</strong> local Japanese speech transcription can create Japanese, English, and Traditional Chinese SRT files.<br />
   Use <strong>Modern</strong> to browse and pick videos, or <strong>SmallTool</strong> to keep watching selected feeds.
 </p>
 
@@ -24,6 +25,9 @@
   ·
   <a href="https://github.com/Alos21750/JableTV-MissAV-Downloader-GUI-2026/releases/latest">View the latest release</a>
 </p>
+
+> [!TIP]
+> **AI subtitles with no API key and no video/audio upload.** After a download, Modern and SmallTool can create selectable `.ja.srt`, `.en.srt`, and `.zh-TW.srt` sidecars without modifying the MP4. Only transcribed text is sent for English/Traditional Chinese translation.
 
 <p align="center">
   <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
@@ -87,11 +91,12 @@ SmallTool checks every 24 hours and also provides Check Now. When the same recog
 
 State is stored in `.Jable_smalltool` beside the executable when writable, otherwise in `%APPDATA%\JableTV Downloader\smalltool`.
 
-## AI-generated subtitles
+## AI subtitles: download first, get selectable Japanese, English, and Traditional Chinese SRTs
 
-- Both Windows GUIs offer **Off / Japanese / English / Traditional Chinese / all three** before download. They create `.ja.srt`, `.en.srt`, and `.zh-TW.srt` beside the video without modifying the MP4.
+- Both Windows GUIs offer **Off / Japanese / English / Traditional Chinese / all three** before download. When the video finishes, they automatically create `.ja.srt`, `.en.srt`, and `.zh-TW.srt` beside it without modifying the MP4 or requiring an API key.
 - Japanese transcription runs locally with the official [whisper.cpp](https://github.com/ggml-org/whisper.cpp). First use downloads and SHA-256-verifies the approximately 60 MB multilingual [base-q5_1 model](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base-q5_1.bin) plus the [official Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main). The current source-language assumption is Japanese audio, and VAD skips non-speech regions.
 - English and Traditional Chinese send only transcribed subtitle text to a no-key Google translation endpoint; video and audio are never uploaded. This free route has no service guarantee. On failure the video and Japanese SRT are kept, and the GUI reports the problem and offers a retry.
+- Modern keeps video downloads and subtitle processing in separate queues, so background subtitle work does not occupy any of the 1–32 video download slots.
 - Runtime depends on CPU, video length, and the amount of speech. All-three mode reuses one local transcription pass.
 
 ## Supported scope
