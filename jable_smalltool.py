@@ -19,6 +19,7 @@ import threading
 import time
 import tkinter as tk
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
 from tkinter import filedialog, messagebox
 from typing import Optional
@@ -119,18 +120,157 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.32'
+APP_VERSION = '2.5.33'
 DEFAULT_WINDOW_WIDTH = 1180
 DEFAULT_WINDOW_HEIGHT = 780
+MIN_WINDOW_WIDTH = 760
+MIN_WINDOW_HEIGHT = 440
 _yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 DEFAULT_BASELINE_DATE = _yesterday.strftime('%Y-%m-%d')
 DEFAULT_BASELINE_DT = datetime(_yesterday.year, _yesterday.month, _yesterday.day, tzinfo=timezone.utc)
 PER_VIDEO_FETCH_DELAY_SEC = 0.3
-CHECK_INTERVAL_SEC = 24 * 60 * 60  # 24 hours
 SCAN_RETRY_BACKOFF_SEC = 10 * 60
 MAX_SCAN_PAGES = 50
 DAILY_SCAN_PAGES = 3
 MAX_CONCURRENT = 2
+DEFAULT_SCAN_INTERVAL_HOURS = 24
+DEFAULT_DAILY_SCAN_TIME = '18:00'
+MIN_SCAN_INTERVAL_HOURS = 1
+MAX_SCAN_INTERVAL_HOURS = 168
+
+
+@dataclass(frozen=True)
+class ScanSchedulePlan:
+    due: bool
+    delay_seconds: float
+    target_local: datetime
+    daily_slot: Optional[str] = None
+
+
+def _normalize_scan_schedule(value) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    mode = str(raw.get('mode') or 'interval').strip().lower()
+    if mode not in {'interval', 'daily'}:
+        mode = 'interval'
+
+    try:
+        interval_hours = int(raw.get(
+            'interval_hours', DEFAULT_SCAN_INTERVAL_HOURS))
+    except (TypeError, ValueError):
+        interval_hours = DEFAULT_SCAN_INTERVAL_HOURS
+    if not MIN_SCAN_INTERVAL_HOURS <= interval_hours <= MAX_SCAN_INTERVAL_HOURS:
+        interval_hours = DEFAULT_SCAN_INTERVAL_HOURS
+
+    daily_time = str(
+        raw.get('daily_time') or DEFAULT_DAILY_SCAN_TIME).strip()
+    match = re.fullmatch(r'(\d{2}):(\d{2})', daily_time)
+    if (not match or int(match.group(1)) > 23 or
+            int(match.group(2)) > 59):
+        daily_time = DEFAULT_DAILY_SCAN_TIME
+
+    return {
+        'mode': mode,
+        'interval_hours': interval_hours,
+        'daily_time': daily_time,
+    }
+
+
+def _parse_utc_timestamp(value) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value or ''))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _plan_next_scan(
+        cfg: dict,
+        *,
+        now_utc: Optional[datetime] = None,
+        now_local: Optional[datetime] = None) -> ScanSchedulePlan:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
+    now_local = now_local or datetime.now().astimezone()
+    if now_local.tzinfo is None:
+        now_local = now_local.astimezone()
+
+    schedule = _normalize_scan_schedule(cfg.get('scan_schedule'))
+    if schedule['mode'] == 'interval':
+        last_check = _parse_utc_timestamp(cfg.get('last_check_iso'))
+        if last_check is None:
+            return ScanSchedulePlan(True, 0, now_local)
+        target_utc = last_check + timedelta(
+            hours=schedule['interval_hours'])
+        delay = max(0.0, (target_utc - now_utc).total_seconds())
+        return ScanSchedulePlan(
+            delay <= 0,
+            delay,
+            target_utc.astimezone(now_local.tzinfo),
+        )
+
+    hour, minute = map(int, schedule['daily_time'].split(':'))
+    today_target = now_local.replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
+    today_slot = (
+        f'daily|{schedule["daily_time"]}|{now_local.date().isoformat()}')
+    if cfg.get('last_daily_slot') == today_slot:
+        target = today_target + timedelta(days=1)
+        slot = (
+            f'daily|{schedule["daily_time"]}|{target.date().isoformat()}')
+        return ScanSchedulePlan(
+            False, max(0.0, (target - now_local).total_seconds()),
+            target, slot)
+    if now_local >= today_target:
+        return ScanSchedulePlan(True, 0, today_target, today_slot)
+    return ScanSchedulePlan(
+        False, max(0.0, (today_target - now_local).total_seconds()),
+        today_target, today_slot)
+
+
+def _initial_window_size(
+        work_width: int, work_height: int) -> tuple[int, int]:
+    horizontal_margin = 24
+    vertical_margin = 40 if work_height >= 600 else 24
+    width = min(DEFAULT_WINDOW_WIDTH, max(
+        320, int(work_width) - horizontal_margin))
+    height = min(DEFAULT_WINDOW_HEIGHT, max(
+        320, int(work_height) - vertical_margin))
+    return width, height
+
+
+def _logical_work_area(window) -> tuple[int, int]:
+    try:
+        scaling = max(float(window._get_window_scaling()), 1.0)
+    except Exception:
+        scaling = 1.0
+    if os.name == 'nt':
+        class _RECT(ctypes.Structure):
+            _fields_ = [
+                ('left', ctypes.c_long),
+                ('top', ctypes.c_long),
+                ('right', ctypes.c_long),
+                ('bottom', ctypes.c_long),
+            ]
+
+        rect = _RECT()
+        try:
+            if ctypes.windll.user32.SystemParametersInfoW(
+                    0x0030, 0, ctypes.byref(rect), 0):
+                return (
+                    max(1, round((rect.right - rect.left) / scaling)),
+                    max(1, round((rect.bottom - rect.top) / scaling)),
+                )
+        except Exception:
+            pass
+    return (
+        max(1, round(window.winfo_screenwidth() / scaling)),
+        max(1, round(window.winfo_screenheight() / scaling)),
+    )
 
 # ── Site / category registry ────────────────────────────────────────
 # The grouped stable-ID registry lives in smalltool_categories.py.
@@ -252,6 +392,9 @@ def _targets_for_scan(targets: list[dict], version_preference: str) -> list[dict
     return expanded
 
 # ── Persistence ──────────────────────────────────────────────────────
+_CONFIG_LOCK = threading.RLock()
+
+
 def _ensure_state_dir() -> None:
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
@@ -260,44 +403,87 @@ def _ensure_state_dir() -> None:
 
 
 def _atomic_write(path: str, text: str) -> None:
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
-def load_config() -> dict:
-    _ensure_state_dir()
-    if os.path.exists(CONFIG_PATH):
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
         try:
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                cfg = json.load(f)
-            if isinstance(cfg, dict):
-                if not str(cfg.get('output_folder') or '').strip():
-                    cfg['output_folder'] = _default_output_folder()
-                cfg['version_preference'] = _normalize_version_pref(cfg)
-                cfg['subtitle_mode'] = normalize_subtitle_mode(
-                    cfg.get('subtitle_mode'))
-                cfg.pop('missav_version_preference', None)
-                return cfg
-        except Exception:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
             pass
+
+
+def _default_config() -> dict:
     return {
         'output_folder': _default_output_folder(),
         'baseline_date': DEFAULT_BASELINE_DATE,
         'version_preference': DEFAULT_VERSION_PREFERENCE,
         'subtitle_mode': 'none',
+        'scan_schedule': _normalize_scan_schedule(None),
         'first_run_done': False,
         # list of {"site": "JableTV", "id": "category:chinese-subtitle", ...}
         'selected_targets': [],
     }
 
 
-def save_config(cfg: dict) -> None:
+def _normalize_loaded_config(cfg: dict) -> dict:
+    if not str(cfg.get('output_folder') or '').strip():
+        cfg['output_folder'] = _default_output_folder()
+    cfg['version_preference'] = _normalize_version_pref(cfg)
+    cfg['subtitle_mode'] = normalize_subtitle_mode(
+        cfg.get('subtitle_mode'))
+    cfg['scan_schedule'] = _normalize_scan_schedule(
+        cfg.get('scan_schedule'))
+    cfg.pop('missav_version_preference', None)
+    return cfg
+
+
+def _load_config_unlocked() -> dict:
     _ensure_state_dir()
-    _atomic_write(CONFIG_PATH, json.dumps(cfg, indent=2, ensure_ascii=False))
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            if isinstance(cfg, dict):
+                return _normalize_loaded_config(cfg)
+        except Exception:
+            pass
+    return _default_config()
+
+
+def load_config() -> dict:
+    with _CONFIG_LOCK:
+        return _load_config_unlocked()
+
+
+def save_config(cfg: dict) -> None:
+    with _CONFIG_LOCK:
+        _ensure_state_dir()
+        normalized = _normalize_loaded_config(dict(cfg))
+        _atomic_write(
+            CONFIG_PATH,
+            json.dumps(normalized, indent=2, ensure_ascii=False),
+        )
+
+
+def update_config(patch: dict, *, remove: tuple[str, ...] = ()) -> dict:
+    """Atomically merge preferences/runtime state without stale overwrites."""
+    with _CONFIG_LOCK:
+        cfg = _load_config_unlocked()
+        cfg.update(dict(patch))
+        for key in remove:
+            cfg.pop(key, None)
+        cfg = _normalize_loaded_config(cfg)
+        _atomic_write(
+            CONFIG_PATH,
+            json.dumps(cfg, indent=2, ensure_ascii=False),
+        )
+        return cfg
 
 
 def _normalize_resolution_pref(cfg: dict) -> str:
@@ -337,6 +523,13 @@ class SmallToolWorker:
         self._status = status_fn
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._control = threading.Condition(threading.RLock())
+        self._run_generation = 0
+        self._thread_local = threading.local()
+        self._mode: Optional[str] = None
+        self._scan_active = False
+        self._manual_requested = False
+        self._schedule_revision = 0
         self._seen = load_seen()
         self._seen_lock = threading.Lock()
         self._progress = None  # (done, total, speed_bps, title) or None
@@ -349,7 +542,18 @@ class SmallToolWorker:
         self._subtitle_mode = 'none'
 
     def _set_status(self, key: str, color: str = TEXT_DIM):
-        if self._status:
+        if not self._status:
+            return
+        generation = getattr(self._thread_local, 'generation', None)
+        with self._control:
+            if (generation is not None and
+                    generation != self._run_generation):
+                return
+        try:
+            self._status(key, color, generation)
+        except TypeError:
+            # Backward compatibility for integrations using the former
+            # two-argument callback.
             self._status(key, color)
 
     def get_progress(self):
@@ -365,15 +569,45 @@ class SmallToolWorker:
             self._scan_state = (
                 (site, category, page, eligible_count) if site else None)
 
+    @property
+    def run_generation(self) -> int:
+        with self._control:
+            return self._run_generation
+
+    def _start(self, mode: str) -> bool:
+        with self._control:
+            if ((self._thread and self._thread.is_alive()) or
+                    self._scan_lock.locked()):
+                return False
+            self._stop.clear()
+            self._manual_requested = False
+            self._run_generation += 1
+            generation = self._run_generation
+            self._mode = mode
+            target = self._run if mode == 'monitor' else self._run_once
+            self._thread = threading.Thread(
+                target=target, args=(generation,), daemon=True)
+            thread = self._thread
+        thread.start()
+        return True
+
+    def start_monitoring(self) -> bool:
+        return self._start('monitor')
+
+    def start_once(self) -> bool:
+        return self._start('once')
+
     def start(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        """Backward-compatible alias for continuous monitoring."""
+        return self.start_monitoring()
 
     def stop(self):
-        self._stop.set()
+        with self._control:
+            self._stop.set()
+            self._manual_requested = False
+            # Invalidate callbacks already queued by the old run.
+            self._run_generation += 1
+            self._control.notify_all()
         self._set_scan_state()
 
     def cancel_active_download(self):
@@ -386,31 +620,178 @@ class SmallToolWorker:
                 pass
 
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        with self._control:
+            return self._thread is not None and self._thread.is_alive()
+
+    def is_monitoring(self) -> bool:
+        with self._control:
+            return (
+                self._mode == 'monitor' and self._thread is not None and
+                self._thread.is_alive())
+
+    def is_scanning(self) -> bool:
+        with self._control:
+            return self._scan_active
+
+    def wait_until_stopped(self, timeout: Optional[float] = None) -> bool:
+        with self._control:
+            thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        return thread is None or not thread.is_alive()
+
+    def request_scan_now(self) -> str:
+        with self._control:
+            if self._thread is not None and self._thread.is_alive():
+                if self._scan_active:
+                    return 'running'
+            if (self._mode != 'monitor' or self._thread is None or
+                    not self._thread.is_alive()):
+                return 'stopped'
+            self._manual_requested = True
+            self._control.notify_all()
+            return 'queued'
+
+    def notify_schedule_changed(self):
+        with self._control:
+            self._schedule_revision += 1
+            self._control.notify_all()
+
+    def _finish_run(self):
+        with self._control:
+            self._scan_active = False
+            if self._thread is threading.current_thread():
+                self._mode = None
+            self._control.notify_all()
+
+    def _wait_for_control(
+            self, delay_seconds: float, generation: int,
+            schedule_revision: int):
+        with self._control:
+            self._control.wait_for(
+                lambda: (
+                    self._stop.is_set()
+                    or generation != self._run_generation
+                    or self._manual_requested
+                    or schedule_revision != self._schedule_revision
+                ),
+                timeout=max(0.01, min(float(delay_seconds), 60.0)),
+            )
+
+    def _perform_scan(self, generation: int) -> bool:
+        with self._control:
+            if (self._stop.is_set() or
+                    generation != self._run_generation):
+                return False
+            self._scan_active = True
+        try:
+            # Always load immediately before the scan. Preferences may have
+            # changed while the monitor was waiting.
+            cfg = load_config()
+            scan_ok = self._scan_and_download(cfg)
+            if scan_ok and not self._stop.is_set():
+                self._record_scan_success(cfg)
+            return scan_ok
+        finally:
+            with self._control:
+                self._scan_active = False
+                self._control.notify_all()
+
+    def _record_scan_success(
+            self,
+            cfg: dict,
+            *,
+            now_utc: Optional[datetime] = None,
+            now_local: Optional[datetime] = None):
+        now_utc = now_utc or datetime.now(timezone.utc)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=timezone.utc)
+        else:
+            now_utc = now_utc.astimezone(timezone.utc)
+        now_local = now_local or datetime.now().astimezone()
+        if now_local.tzinfo is None:
+            now_local = now_local.astimezone()
+
+        latest = load_config()
+        schedule = _normalize_scan_schedule(latest.get('scan_schedule'))
+        patch = {
+            'first_run_done': True,
+            'last_check_iso': now_utc.isoformat(),
+        }
+        if schedule['mode'] == 'daily':
+            hour, minute = map(int, schedule['daily_time'].split(':'))
+            target = now_local.replace(
+                hour=hour, minute=minute, second=0, microsecond=0)
+            if now_local >= target:
+                patch['last_daily_slot'] = (
+                    f'daily|{schedule["daily_time"]}|'
+                    f'{now_local.date().isoformat()}')
+        update_config(patch)
+        cfg.update(patch)
 
     # ── Main loop ────────────────────────────────────────────────────
-    def _run(self):
-        cfg = load_config()
+    def _run_once(self, generation: int):
+        self._thread_local.generation = generation
+        try:
+            scan_ok = self._perform_scan(generation)
+            if (not self._stop.is_set() and
+                    generation == self.run_generation):
+                self._set_status(
+                    'st_idle' if scan_ok else 'st_detect_failed',
+                    TEXT_DIM if scan_ok else WARNING)
+        except Exception as e:
+            self._log(f'[ERROR] scan failed: {e}')
+            self._set_status('st_detect_failed', WARNING)
+        finally:
+            self._finish_run()
+
+    def _run(self, generation: int):
+        self._thread_local.generation = generation
         self._log(T('st_worker_started'))
-        while not self._stop.is_set():
-            scan_ok = False
-            try:
-                scan_ok = self._scan_and_download(cfg)
-            except Exception as e:
-                self._log(f'[ERROR] scan failed: {e}')
-            if self._stop.is_set():
-                break
-            if scan_ok:
-                self._set_status('st_running', SUCCESS)
-            else:
-                self._set_status('st_detect_failed', WARNING)
-            cfg = load_config()
-            waited = 0
-            interval = CHECK_INTERVAL_SEC if scan_ok else SCAN_RETRY_BACKOFF_SEC
-            while waited < interval and not self._stop.is_set():
-                time.sleep(5)
-                waited += 5
-        self._log(T('st_worker_stopped'))
+        retry_deadline = None
+        try:
+            while not self._stop.is_set():
+                with self._control:
+                    if generation != self._run_generation:
+                        break
+                    manual = self._manual_requested
+                    self._manual_requested = False
+                    schedule_revision = self._schedule_revision
+
+                due = manual
+                delay = 0.0
+                if not due and retry_deadline is not None:
+                    delay = max(0.0, retry_deadline - time.monotonic())
+                    due = delay <= 0
+                elif not due:
+                    plan = _plan_next_scan(load_config())
+                    due = plan.due
+                    delay = plan.delay_seconds
+
+                if not due:
+                    self._set_status('st_waiting_schedule', SUCCESS)
+                    self._wait_for_control(
+                        delay, generation, schedule_revision)
+                    continue
+
+                try:
+                    scan_ok = self._perform_scan(generation)
+                except Exception as e:
+                    scan_ok = False
+                    self._log(f'[ERROR] scan failed: {e}')
+                if (self._stop.is_set() or
+                        generation != self.run_generation):
+                    break
+                if scan_ok:
+                    retry_deadline = None
+                    self._set_status('st_running', SUCCESS)
+                else:
+                    retry_deadline = (
+                        time.monotonic() + SCAN_RETRY_BACKOFF_SEC)
+                    self._set_status('st_detect_failed', WARNING)
+        finally:
+            self._log(T('st_worker_stopped'))
+            self._finish_run()
 
     # Chinese numerals → int
     _CN_NUMS = {
@@ -870,7 +1251,6 @@ class SmallToolWorker:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
-            save_config(cfg)
             return True
 
         candidate_codes = {
@@ -904,8 +1284,6 @@ class SmallToolWorker:
                 self._log('[WARN] Scan incomplete — will retry before marking first run done.')
                 return False
             cfg['first_run_done'] = True
-            cfg['last_check_iso'] = datetime.now(timezone.utc).isoformat()
-            save_config(cfg)
             return True
 
         self._set_scan_state()
@@ -932,8 +1310,6 @@ class SmallToolWorker:
             self._log('[WARN] Scan incomplete — first run flag not updated.')
             return False
         cfg['first_run_done'] = True
-        cfg['last_check_iso'] = datetime.now(timezone.utc).isoformat()
-        save_config(cfg)
         return True
 
     def _download_one(self, video: dict, dest: str, subtitle_mode: Optional[str] = None):
@@ -1122,8 +1498,14 @@ class SmallToolApp(ctk.CTk):
         self._needs_lang_prompt = (stored is None)
 
         self._update_window_title()
-        self.geometry(f'{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}')
-        self.minsize(820, 680)
+        work_width, work_height = _logical_work_area(self)
+        window_width, window_height = _initial_window_size(
+            work_width, work_height)
+        self.geometry(f'{window_width}x{window_height}')
+        self.minsize(
+            min(MIN_WINDOW_WIDTH, window_width),
+            min(MIN_WINDOW_HEIGHT, window_height),
+        )
         self.configure(fg_color=BG_DARK)
 
         self._cfg = load_config()
@@ -1146,8 +1528,12 @@ class SmallToolApp(ctk.CTk):
         self._filter_groups: list[dict] = []
         self._category_groups: list[list[object]] = []
         self._category_columns = category_columns_for_width(
-            DEFAULT_WINDOW_WIDTH)
+            window_width)
         self._categories_collapsed = False
+        self._settings_expanded = False
+        self._activity_visible = False
+        self._progress_visible = False
+        self._schedule_popup = None
         self._progress_display_mode = 'idle'
         self._resize_after_id = None
 
@@ -1156,10 +1542,11 @@ class SmallToolApp(ctk.CTk):
         self._load_selections_from_config()
         self._sync_select_all_vars()
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self.after_idle(self._fit_window_to_work_area)
 
         # Auto-start if configured
         if self._cfg.get('output_folder') and self._cfg.get('selected_targets'):
-            self._start_worker()
+            self.after_idle(self._auto_start_worker)
 
         self._schedule_log_flush()
         self._schedule_progress_refresh()
@@ -1168,6 +1555,48 @@ class SmallToolApp(ctk.CTk):
 
     def _update_window_title(self):
         self.title(T('st_window_title', app=APP_NAME, version=APP_VERSION))
+
+    def _fit_window_to_work_area(self):
+        """Center the realized outer window without crossing the work area."""
+        if self._is_closing:
+            return
+        try:
+            self.update_idletasks()
+            if os.name == 'nt':
+                class _RECT(ctypes.Structure):
+                    _fields_ = [
+                        ('left', ctypes.c_long),
+                        ('top', ctypes.c_long),
+                        ('right', ctypes.c_long),
+                        ('bottom', ctypes.c_long),
+                    ]
+
+                work = _RECT()
+                outer = _RECT()
+                client_hwnd = self.winfo_id()
+                get_ancestor = ctypes.windll.user32.GetAncestor
+                get_ancestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+                get_ancestor.restype = ctypes.c_void_p
+                hwnd = get_ancestor(client_hwnd, 2) or client_hwnd
+                if (ctypes.windll.user32.SystemParametersInfoW(
+                        0x0030, 0, ctypes.byref(work), 0) and
+                        ctypes.windll.user32.GetWindowRect(
+                            hwnd, ctypes.byref(outer))):
+                    width = outer.right - outer.left
+                    height = outer.bottom - outer.top
+                    x = work.left + max(
+                        0, ((work.right - work.left) - width) // 2)
+                    y = work.top + max(
+                        0, ((work.bottom - work.top) - height) // 2)
+                    ctypes.windll.user32.SetWindowPos(
+                        hwnd, 0, x, y, 0, 0,
+                        0x0001 | 0x0004 | 0x0010)
+                    return
+            x = max(0, (self.winfo_screenwidth() - self.winfo_width()) // 2)
+            y = max(0, (self.winfo_screenheight() - self.winfo_height()) // 2)
+            self.geometry(f'+{x}+{y}')
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _ask_language_first_run(self):
         popup = None
@@ -1254,6 +1683,8 @@ class SmallToolApp(ctk.CTk):
             'status_key': self._status_key,
             'status_fg': self._status_fg,
             'categories_collapsed': self._categories_collapsed,
+            'settings_expanded': self._settings_expanded,
+            'activity_visible': self._activity_visible,
         }
 
     def _restore_ui_state(self, snapshot: dict):
@@ -1284,6 +1715,9 @@ class SmallToolApp(ctk.CTk):
             self._set_status_key(snapshot['status_key'], snapshot['status_fg'])
         self._check_now_btn.configure(state=snapshot['check_now_state'])
         self._set_categories_collapsed(snapshot['categories_collapsed'])
+        self._set_settings_expanded(snapshot['settings_expanded'])
+        self._set_activity_visible(snapshot['activity_visible'])
+        self._refresh_schedule_summary()
 
     def _apply_language(self, code: str):
         self._rebuilding = True
@@ -1496,8 +1930,8 @@ class SmallToolApp(ctk.CTk):
         main = ctk.CTkFrame(self, fg_color='transparent')
         main.pack(fill='both', expand=True, padx=18, pady=(14, 12))
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(1, weight=3, minsize=190)
-        main.grid_rowconfigure(4, weight=2, minsize=110)
+        main.grid_rowconfigure(1, weight=1)
+        main.grid_rowconfigure(4, weight=0)
         self._main_frame = main
 
         # ── Config row: folder + date ───────────────────────────────
@@ -1519,26 +1953,40 @@ class SmallToolApp(ctk.CTk):
             border_color=BORDER, border_width=1,
             text_color=TEXT_PRI, font=(font_family, 11)).grid(
                 row=0, column=1, padx=8, pady=(14, 8), sticky='ew')
+        folder_actions = ctk.CTkFrame(cfg_card, fg_color='transparent')
+        folder_actions.grid(
+            row=0, column=2, padx=(8, 16), pady=(14, 8))
         ctk.CTkButton(
-            cfg_card, text=T('st_browse'), width=82, height=38,
+            folder_actions, text=T('st_browse'), width=82, height=38,
             corner_radius=CONTROL_RADIUS, fg_color='transparent',
             border_width=1, border_color=BORDER_HOVER,
             hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
-            font=(font_family, 11), command=self._pick_folder).grid(
-                row=0, column=2, padx=(8, 16), pady=(14, 8))
+            font=(font_family, 11), command=self._pick_folder).pack(
+                side='left')
+        self._settings_toggle_btn = ctk.CTkButton(
+            folder_actions, text=T('st_settings_expand'),
+            width=104, height=38,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(font_family, 10, 'bold'),
+            command=self._toggle_settings)
+        self._settings_toggle_btn.pack(side='left', padx=(6, 0))
 
-        ctk.CTkLabel(
+        proxy_label = ctk.CTkLabel(
             cfg_card, text=T('proxy_url_label'), text_color=TEXT_SEC,
-            font=(font_family, 11, 'bold'), width=98, anchor='w').grid(
-                row=1, column=0, padx=(16, 8), pady=(2, 2), sticky='w')
+            font=(font_family, 11, 'bold'), width=98, anchor='w')
+        proxy_label.grid(
+            row=1, column=0, padx=(16, 8), pady=(2, 2), sticky='w')
         self._proxy_var = tk.StringVar(value=config.get_proxy_url())
-        ctk.CTkEntry(
+        proxy_entry = ctk.CTkEntry(
             cfg_card, textvariable=self._proxy_var,
             placeholder_text=T('proxy_url_placeholder'), height=34,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
-            text_color=TEXT_PRI, font=(font_family, 10)).grid(
-                row=1, column=1, padx=8, pady=(2, 2), sticky='ew')
+            text_color=TEXT_PRI, font=(font_family, 10))
+        proxy_entry.grid(
+            row=1, column=1, padx=8, pady=(2, 2), sticky='ew')
         proxy_actions = ctk.CTkFrame(cfg_card, fg_color='transparent')
         proxy_actions.grid(row=1, column=2, padx=(8, 16), pady=(2, 2))
         ctk.CTkButton(
@@ -1669,6 +2117,13 @@ class SmallToolApp(ctk.CTk):
         # Apply saved preference immediately (before auto-start)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg.get('resolution', 'highest'))
+        self._settings_widgets = [
+            proxy_label, proxy_entry, proxy_actions,
+            self._proxy_status_lbl, options,
+        ]
+        for widget in self._settings_widgets:
+            widget.grid_remove()
+        self._settings_expanded = False
 
         # ── Site / Category selection ───────────────────────────────
         selection = ctk.CTkFrame(
@@ -1700,14 +2155,11 @@ class SmallToolApp(ctk.CTk):
         self._category_filter_box = ctk.CTkFrame(
             selection_header, fg_color='transparent')
         self._category_filter_box.pack(side='right', padx=(0, 8))
-        ctk.CTkLabel(
-            self._category_filter_box, text=T('st_filter_categories'),
-            text_color=TEXT_DIM, font=(font_family, 9)).pack(
-                side='left', padx=(0, 8))
         self._category_filter_var = tk.StringVar()
         filter_entry = ctk.CTkEntry(
             self._category_filter_box, textvariable=self._category_filter_var,
-            width=190, height=32,
+            placeholder_text=T('st_filter_categories'),
+            width=200, height=32,
             corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
             border_color=BORDER, border_width=1,
             text_color=TEXT_PRI, font=(font_family, 10))
@@ -1826,6 +2278,24 @@ class SmallToolApp(ctk.CTk):
             command=self._check_now)
         self._check_now_btn.pack(side='left', padx=(8, 0))
 
+        self._schedule_btn = ctk.CTkButton(
+            ctrl, text=T('st_schedule'), width=104, height=40,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_PRI,
+            font=(font_family, 10, 'bold'),
+            command=self._open_schedule)
+        self._schedule_btn.pack(side='left', padx=(8, 0))
+
+        self._activity_toggle_btn = ctk.CTkButton(
+            ctrl, text=T('st_activity_show'), width=108, height=40,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER_HOVER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(font_family, 10),
+            command=self._toggle_activity)
+        self._activity_toggle_btn.pack(side='left', padx=(8, 0))
+
         status_box = ctk.CTkFrame(
             ctrl, fg_color=BG_BADGE, corner_radius=CONTROL_RADIUS,
             border_width=1, border_color=BORDER)
@@ -1840,6 +2310,7 @@ class SmallToolApp(ctk.CTk):
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
         prog_outer.grid(row=3, column=0, sticky='ew', pady=(0, 10))
+        self._progress_panel = prog_outer
 
         self._prog_title = ctk.CTkLabel(
             prog_outer, text=T('st_progress_idle'), text_color=TEXT_SEC,
@@ -1871,20 +2342,261 @@ class SmallToolApp(ctk.CTk):
             main, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
             border_width=1, border_color=BORDER_CARD)
         activity.grid(row=4, column=0, sticky='nsew')
+        self._activity_panel = activity
         activity_header = ctk.CTkFrame(activity, fg_color='transparent')
         activity_header.pack(fill='x', padx=14, pady=(9, 5))
         ctk.CTkLabel(
             activity_header, text=T('st_activity'), text_color=TEXT_PRI,
             font=(font_family, 11, 'bold')).pack(side='left')
-        ctk.CTkLabel(
-            activity_header, text=T('st_footer_short'), text_color=TEXT_DIM,
-            font=(font_family, 9)).pack(side='right')
+        self._schedule_summary_lbl = ctk.CTkLabel(
+            activity_header, text=self._schedule_summary_text(),
+            text_color=TEXT_DIM, font=(font_family, 9))
+        self._schedule_summary_lbl.pack(side='right')
 
         self._log_box = ctk.CTkTextbox(
             activity, fg_color=BG_INPUT, text_color=TEXT_SEC,
             border_width=0, corner_radius=6,
             font=('Consolas', 10), wrap='word', state='disabled')
         self._log_box.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        prog_outer.grid_remove()
+        activity.grid_remove()
+        self._progress_visible = False
+        self._activity_visible = False
+
+    def _schedule_summary_text(self) -> str:
+        schedule = _normalize_scan_schedule(
+            self._cfg.get('scan_schedule'))
+        if schedule['mode'] == 'daily':
+            return T(
+                'st_schedule_summary_daily',
+                time=schedule['daily_time'],
+            )
+        return T(
+            'st_schedule_summary_interval',
+            hours=schedule['interval_hours'],
+        )
+
+    def _refresh_schedule_summary(self):
+        if hasattr(self, '_schedule_summary_lbl'):
+            try:
+                self._schedule_summary_lbl.configure(
+                    text=self._schedule_summary_text())
+            except tk.TclError:
+                pass
+
+    def _toggle_settings(self):
+        self._set_settings_expanded(not self._settings_expanded)
+
+    def _set_settings_expanded(self, expanded: bool):
+        if not hasattr(self, '_settings_widgets'):
+            return
+        self._settings_expanded = bool(expanded)
+        for widget in self._settings_widgets:
+            try:
+                if self._settings_expanded:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+            except (tk.TclError, AttributeError):
+                pass
+        if hasattr(self, '_settings_toggle_btn'):
+            self._settings_toggle_btn.configure(
+                text=T(
+                    'st_settings_collapse' if self._settings_expanded
+                    else 'st_settings_expand'))
+
+    def _toggle_activity(self):
+        self._set_activity_visible(not self._activity_visible)
+
+    def _set_activity_visible(self, visible: bool):
+        if not hasattr(self, '_activity_panel'):
+            return
+        self._activity_visible = bool(visible)
+        try:
+            if self._activity_visible:
+                self._activity_panel.grid()
+                self._main_frame.grid_rowconfigure(4, weight=1)
+            else:
+                self._activity_panel.grid_remove()
+                self._main_frame.grid_rowconfigure(4, weight=0)
+        except tk.TclError:
+            return
+        if hasattr(self, '_activity_toggle_btn'):
+            self._activity_toggle_btn.configure(
+                text=T(
+                    'st_activity_hide' if self._activity_visible
+                    else 'st_activity_show'))
+
+    def _set_progress_visible(self, visible: bool):
+        if not hasattr(self, '_progress_panel'):
+            return
+        visible = bool(visible)
+        if visible == self._progress_visible:
+            return
+        self._progress_visible = visible
+        try:
+            if visible:
+                self._progress_panel.grid()
+            else:
+                self._progress_panel.grid_remove()
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _timezone_display() -> tuple[str, str]:
+        local = datetime.now().astimezone()
+        zone = local.tzname() or 'Local'
+        offset = local.utcoffset() or timedelta(0)
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = '+' if total_minutes >= 0 else '-'
+        total_minutes = abs(total_minutes)
+        return zone, f'{sign}{total_minutes // 60:02d}:{total_minutes % 60:02d}'
+
+    def _open_schedule(self):
+        existing = self._schedule_popup
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+
+        schedule = _normalize_scan_schedule(
+            self._cfg.get('scan_schedule'))
+        popup = ctk.CTkToplevel(self)
+        self._schedule_popup = popup
+        popup.title(T('st_schedule_title'))
+        popup.geometry('460x340')
+        popup.resizable(False, False)
+        popup.transient(self)
+        popup.configure(fg_color=BG_DARK)
+        popup.grid_columnconfigure(0, weight=1)
+
+        body = ctk.CTkFrame(
+            popup, fg_color=BG_CARD, corner_radius=CARD_RADIUS,
+            border_width=1, border_color=BORDER_CARD)
+        body.grid(row=0, column=0, padx=18, pady=(18, 10), sticky='nsew')
+        body.grid_columnconfigure(1, weight=1)
+
+        mode_var = tk.StringVar(value=schedule['mode'])
+        hours_var = tk.StringVar(value=str(schedule['interval_hours']))
+        time_var = tk.StringVar(value=schedule['daily_time'])
+
+        ctk.CTkRadioButton(
+            body, text=T('st_schedule_interval'), variable=mode_var,
+            value='interval', fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            border_color=BORDER_HOVER, text_color=TEXT_PRI,
+            font=(ui_font(), 11, 'bold')).grid(
+                row=0, column=0, padx=(18, 10), pady=(20, 10), sticky='w')
+        interval_controls = ctk.CTkFrame(body, fg_color='transparent')
+        interval_controls.grid(
+            row=0, column=1, padx=(0, 18), pady=(20, 10), sticky='w')
+        ctk.CTkEntry(
+            interval_controls, textvariable=hours_var, width=76, height=36,
+            corner_radius=CONTROL_RADIUS, fg_color=BG_INPUT,
+            border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=('Consolas', 11)).pack(side='left')
+        ctk.CTkLabel(
+            interval_controls, text=T('st_schedule_hours'),
+            text_color=TEXT_SEC, font=(ui_font(), 10)).pack(
+                side='left', padx=(8, 0))
+
+        ctk.CTkRadioButton(
+            body, text=T('st_schedule_daily'), variable=mode_var,
+            value='daily', fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            border_color=BORDER_HOVER, text_color=TEXT_PRI,
+            font=(ui_font(), 11, 'bold')).grid(
+                row=1, column=0, padx=(18, 10), pady=10, sticky='w')
+        ctk.CTkEntry(
+            body, textvariable=time_var, width=96, height=36,
+            placeholder_text='HH:MM', corner_radius=CONTROL_RADIUS,
+            fg_color=BG_INPUT, border_color=BORDER, border_width=1,
+            text_color=TEXT_PRI, font=('Consolas', 11)).grid(
+                row=1, column=1, padx=(0, 18), pady=10, sticky='w')
+
+        zone, offset = self._timezone_display()
+        ctk.CTkLabel(
+            body, text=T(
+                'st_schedule_local_time', zone=zone, offset=offset),
+            text_color=TEXT_SEC, font=(ui_font(), 10),
+            anchor='w').grid(
+                row=2, column=0, columnspan=2,
+                padx=18, pady=(12, 4), sticky='ew')
+        ctk.CTkLabel(
+            body, text=T('st_schedule_hint'), text_color=TEXT_DIM,
+            font=(ui_font(), 9), justify='left', wraplength=390,
+            anchor='w').grid(
+                row=3, column=0, columnspan=2,
+                padx=18, pady=(4, 18), sticky='ew')
+
+        actions = ctk.CTkFrame(popup, fg_color='transparent')
+        actions.grid(row=1, column=0, padx=18, pady=(0, 18), sticky='ew')
+
+        def close_popup():
+            try:
+                popup.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                popup.destroy()
+            except tk.TclError:
+                pass
+            self._schedule_popup = None
+
+        def save_schedule():
+            try:
+                hours = int(hours_var.get().strip())
+            except ValueError:
+                hours = 0
+            if not MIN_SCAN_INTERVAL_HOURS <= hours <= MAX_SCAN_INTERVAL_HOURS:
+                messagebox.showwarning(
+                    T('st_schedule_title'),
+                    T('st_schedule_invalid_hours'),
+                    parent=popup)
+                return
+            daily_time = time_var.get().strip()
+            match = re.fullmatch(r'(\d{2}):(\d{2})', daily_time)
+            if (not match or int(match.group(1)) > 23 or
+                    int(match.group(2)) > 59):
+                messagebox.showwarning(
+                    T('st_schedule_title'),
+                    T('st_schedule_invalid_time'),
+                    parent=popup)
+                return
+            normalized = _normalize_scan_schedule({
+                'mode': mode_var.get(),
+                'interval_hours': hours,
+                'daily_time': daily_time,
+            })
+            self._cfg['scan_schedule'] = normalized
+            update_config({'scan_schedule': normalized})
+            self._worker.notify_schedule_changed()
+            self._refresh_schedule_summary()
+            self._log(T('st_schedule_saved'))
+            close_popup()
+
+        ctk.CTkButton(
+            actions, text=T('st_schedule_save'), height=40,
+            corner_radius=CONTROL_RADIUS, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=WHITE,
+            font=(ui_font(), 10, 'bold'),
+            command=save_schedule).pack(side='left', expand=True, fill='x')
+        ctk.CTkButton(
+            actions, text=T('st_calendar_cancel'), height=40,
+            corner_radius=CONTROL_RADIUS, fg_color='transparent',
+            border_width=1, border_color=BORDER,
+            hover_color=BG_CARD_HOVER, text_color=TEXT_SEC,
+            font=(ui_font(), 10), command=close_popup).pack(
+                side='left', expand=True, fill='x', padx=(8, 0))
+
+        popup.protocol('WM_DELETE_WINDOW', close_popup)
+        popup.update_idletasks()
+        x = self.winfo_rootx() + max(
+            0, (self.winfo_width() - popup.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(
+            0, (self.winfo_height() - popup.winfo_height()) // 3)
+        popup.geometry(f'+{x}+{y}')
+        popup.after(40, popup.grab_set)
 
     # ── Selection helpers ────────────────────────────────────────────
     def _toggle_categories(self):
@@ -1913,7 +2625,7 @@ class SmallToolApp(ctk.CTk):
                 fill='both', expand=True, padx=10, pady=(0, 10))
             if '_main_frame' in self.__dict__:
                 self._main_frame.grid_rowconfigure(
-                    1, weight=3, minsize=190)
+                    1, weight=1, minsize=0)
                 self._selection_panel.grid_configure(sticky='nsew')
             else:
                 self._selection_panel.pack_configure(
@@ -2187,7 +2899,10 @@ class SmallToolApp(ctk.CTk):
                 return False
         self._cfg['selected_targets'] = self._get_selected_targets()
         self._cfg['baseline_date'] = date_str
-        save_config(self._cfg)
+        update_config({
+            'selected_targets': self._cfg['selected_targets'],
+            'baseline_date': date_str,
+        })
         return True
 
     def _load_selections_from_config(self):
@@ -2199,7 +2914,7 @@ class SmallToolApp(ctk.CTk):
         if d:
             self._folder_var.set(d)
             self._cfg['output_folder'] = d
-            save_config(self._cfg)
+            update_config({'output_folder': d})
             self._log(T('st_folder_set', path=d))
 
     def _prepare_output_folder(self) -> Optional[str]:
@@ -2269,19 +2984,25 @@ class SmallToolApp(ctk.CTk):
         pref = self._resolution_pref_from_label(val)
         set_resolution_pref(pref)
         self._cfg['resolution'] = pref
-        save_config(self._cfg)
+        update_config({'resolution': pref})
 
     def _on_version_change(self, val):
         pref = self._version_pref_from_label(val)
         self._cfg['version_preference'] = pref
         self._cfg.pop('missav_version_preference', None)
-        save_config(self._cfg)
+        update_config(
+            {'version_preference': pref},
+            remove=('missav_version_preference',))
 
     def _on_subtitle_change(self, val):
         self._cfg['subtitle_mode'] = self._subtitle_pref_from_label(val)
-        save_config(self._cfg)
+        update_config({'subtitle_mode': self._cfg['subtitle_mode']})
 
-    def _start_worker(self):
+    def _auto_start_worker(self):
+        if not self._is_closing:
+            self._start_worker(auto_start=True)
+
+    def _start_worker(self, auto_start=False):
         folder = self._prepare_output_folder()
         if not folder:
             return
@@ -2310,21 +3031,40 @@ class SmallToolApp(ctk.CTk):
         self._log(T('st_target_log', sites=sites_summary, categories=cats_summary))
         self._log(T('st_baseline_log', date=date_str))
 
-        self._worker.start()
+        if not self._worker.start_monitoring():
+            self._log(T('st_scan_running'))
+            return
         self._start_btn.configure(state='disabled')
         self._stop_btn.configure(state='normal')
-        self._set_categories_collapsed(True)
-        self._set_status_key('st_scanning', ACCENT)
+        self._check_now_btn.configure(state='normal')
+        plan = _plan_next_scan(load_config())
+        self._set_status_key(
+            'st_scanning' if plan.due else 'st_waiting_schedule',
+            ACCENT if plan.due else SUCCESS)
         self._log(T('st_started_msg'))
 
     def _stop_worker(self):
+        if not self._worker.is_running():
+            self._start_btn.configure(state='normal')
+            self._stop_btn.configure(state='disabled')
+            self._check_now_btn.configure(state='normal')
+            self._set_status_key('st_stopped', TEXT_DIM)
+            return
         self._worker.stop()
         self._worker.cancel_active_download()
-        self._start_btn.configure(state='normal')
+        self._start_btn.configure(state='disabled')
         self._stop_btn.configure(state='disabled')
-        self._set_status_key('st_stopped', TEXT_DIM)
+        self._check_now_btn.configure(state='disabled')
+        self._set_status_key('st_stopping', TEXT_DIM)
 
     def _check_now(self):
+        if self._worker.is_monitoring():
+            result = self._worker.request_scan_now()
+            if result == 'queued':
+                self._log(T('st_scan_queued'))
+            else:
+                self._log(T('st_scan_running'))
+            return
         if self._worker.is_running():
             self._log(T('st_scan_running'))
             return
@@ -2341,46 +3081,45 @@ class SmallToolApp(ctk.CTk):
         self._cfg['output_folder'] = folder
         if not self._save_selections_to_config(date_str):
             return
+        if not self._worker.start_once():
+            self._log(T('st_scan_running'))
+            return
+        self._start_btn.configure(state='disabled')
+        self._stop_btn.configure(state='normal')
         self._check_now_btn.configure(state='disabled')
-        self._set_categories_collapsed(True)
         self._set_status_key('st_scanning', ACCENT)
-
-        def _once():
-            cfg = load_config()
-            try:
-                ok = self._worker._scan_and_download(cfg)
-                if ok:
-                    self._set_status_threadsafe('st_idle', TEXT_DIM)
-                else:
-                    self._set_status_threadsafe('st_detect_failed', WARNING)
-            except Exception as e:
-                self._log(f'[ERR] {e}')
-                self._set_status_threadsafe('st_detect_failed', WARNING)
-            finally:
-                try:
-                    self.after(0, self._enable_check_now_btn)
-                except tk.TclError:
-                    pass
-
-        threading.Thread(target=_once, daemon=True).start()
         self._log(T('st_checking_now'))
 
     # ── Logging (thread-safe) ────────────────────────────────────────
-    def _enable_check_now_btn(self):
+    def _sync_worker_controls(self):
         if self._is_closing or not hasattr(self, '_check_now_btn'):
             return
         try:
-            self._check_now_btn.configure(state='normal')
-        except tk.TclError:
+            running = self._worker.is_running()
+            monitoring = self._worker.is_monitoring()
+            self._start_btn.configure(
+                state='disabled' if running else 'normal')
+            self._stop_btn.configure(
+                state='normal' if running else 'disabled')
+            self._check_now_btn.configure(
+                state='normal' if (not running or monitoring)
+                else 'disabled')
+            if not running and self._status_key == 'st_stopping':
+                self._set_status_key('st_stopped', TEXT_DIM)
+        except (tk.TclError, RuntimeError):
             pass
 
-    def _set_status_threadsafe(self, key: str, fg: str = TEXT_DIM):
+    def _set_status_threadsafe(
+            self, key: str, fg: str = TEXT_DIM,
+            worker_generation: Optional[int] = None):
         def _apply():
-            if not self._is_closing:
+            if (not self._is_closing and
+                    (worker_generation is None or
+                     worker_generation == self._worker.run_generation)):
                 self._set_status_key(key, fg)
         try:
             self.after(0, _apply)
-        except tk.TclError:
+        except (tk.TclError, RuntimeError):
             pass
 
     def _enqueue_log(self, msg: str):
@@ -2462,7 +3201,10 @@ class SmallToolApp(ctk.CTk):
         prog = self._worker.get_progress()
         scan = self._worker.get_scan_state()
         try:
+            self._sync_worker_controls()
+            self._refresh_schedule_summary()
             if prog:
+                self._set_progress_visible(True)
                 done, total, speed, title = prog
                 if total > 0:
                     self._set_progress_display_mode('download')
@@ -2485,6 +3227,7 @@ class SmallToolApp(ctk.CTk):
                 short = title[:50] + '...' if len(title) > 50 else title
                 self._prog_title.configure(text=f'↓ {short}', text_color=TEXT_PRI)
             elif scan:
+                self._set_progress_visible(True)
                 self._set_progress_display_mode('scan')
                 site, category, page, eligible_count = scan
                 self._prog_pct.configure(text='')
@@ -2495,34 +3238,66 @@ class SmallToolApp(ctk.CTk):
                            category=category, page=page),
                     text_color=ACCENT)
             else:
+                self._set_progress_visible(False)
                 self._set_progress_display_mode('idle')
                 self._prog_bar.set(0)
                 self._prog_pct.configure(text='')
                 self._prog_info.configure(text='')
                 self._prog_title.configure(text=T('st_progress_idle'), text_color=TEXT_SEC)
-        except (tk.TclError, AttributeError):
+        except (tk.TclError, AttributeError, RuntimeError):
             if not self._is_closing:
                 try:
                     self.after(500, lambda gen=self._build_gen: self._refresh_progress(gen))
-                except tk.TclError:
+                except (tk.TclError, RuntimeError):
                     pass
             return
         try:
             self.after(500, lambda gen=self._build_gen: self._refresh_progress(gen))
-        except tk.TclError:
+        except (tk.TclError, RuntimeError):
             pass
 
     def _on_close(self):
         self._is_closing = True
         self._build_gen += 1
-        self._save_selections_to_config()
+        popup = getattr(self, '_schedule_popup', None)
+        try:
+            if popup is not None and popup.winfo_exists():
+                popup.destroy()
+        except tk.TclError:
+            pass
         self._worker.stop()
         self._worker.cancel_active_download()
         try:
-            save_config(self._cfg)
+            patch = {
+                'selected_targets': self._get_selected_targets(),
+                'output_folder': (
+                    self._folder_var.get().strip()
+                    if hasattr(self, '_folder_var')
+                    else self._cfg.get('output_folder')),
+                'resolution': self._cfg.get('resolution', 'highest'),
+                'version_preference': self._cfg.get(
+                    'version_preference', DEFAULT_VERSION_PREFERENCE),
+                'subtitle_mode': normalize_subtitle_mode(
+                    self._cfg.get('subtitle_mode')),
+                'scan_schedule': _normalize_scan_schedule(
+                    self._cfg.get('scan_schedule')),
+            }
+            if hasattr(self, '_date_var'):
+                candidate = self._date_var.get().strip()
+                try:
+                    datetime.strptime(candidate, '%Y-%m-%d')
+                except ValueError:
+                    pass
+                else:
+                    patch['baseline_date'] = candidate
+            update_config(patch, remove=('missav_version_preference',))
         except Exception:
             pass
-        self.destroy()
+        self._worker.wait_until_stopped(timeout=1.5)
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
 
 def main():

@@ -30,7 +30,7 @@
 > **AI 字幕不用 API Key，也不用上傳影音。** Modern 與 SmallTool 可在影片下載完成後，自動建立播放器可切換的 `.ja.srt`、`.en.srt`、`.zh-TW.srt`，且不修改 MP4；英文／繁中翻譯只會傳送辨識後的文字。
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.33 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## 先選一個工具
@@ -71,15 +71,14 @@
 ## SmallTool：依分類自動追新
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.32 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority and AI subtitles" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.33 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority and AI subtitles" />
 </p>
 
 1. 選擇儲存位置；若不選，會在執行檔旁自動建立 `tmp`。
-2. 用日曆選基準日期，或使用「昨天、1／2／3／6 個月前」快捷選項。
-3. 選畫質與版本優先：中文字幕、無碼／流出、一般版、英文字幕、馬賽克減弱。
-4. 選 AI 字幕：不產生、日文、英文、繁中，或一次產生三語。
-5. 在三個網站分頁搜尋並勾選分類；支援群組全選。
-6. 按「開始監控」。分類區會自動收合，進度區會顯示正在掃描或產生字幕的階段。
+2. 按「顯示設定」調整基準日期、畫質、版本優先、AI 字幕與 Proxy；平常收合設定可把空間完整留給分類。
+3. 在三個網站分頁搜尋並勾選分類；支援群組全選。
+4. 按「排程」選擇每 1–168 小時，或每天依電腦本地時間在指定時刻檢查。
+5. 按「開始監控」。分類會保持可見；掃描或下載時才顯示進度，需要紀錄時按「顯示活動」。
 
 | 網站 | 可選目標數 | 分組內容 |
 |---|---:|---|
@@ -87,7 +86,7 @@
 | MissAV | 102 | 動態／榜單、分類／標籤、片商群組 |
 | SupJav | 10 | 動態／榜單與主要分類 |
 
-SmallTool 每 24 小時自動檢查，也可按「立即檢查」。同一番號跨分類或跨網站重複時，會優先保留符合使用者版本偏好的候選；無法可靠辨識番號時只按完全相同網址去重，不猜測合併。
+SmallTool 可設為每 1–168 小時自動檢查，或每天依這台電腦的本地時間在指定時刻檢查；舊設定仍預設每 24 小時。按「立即檢查」會立刻執行一次，不會另外建立重複排程。同一番號跨分類或跨網站重複時，會優先保留符合使用者版本偏好的候選；無法可靠辨識番號時只按完全相同網址去重，不猜測合併。
 
 下載記錄優先存於執行檔旁的 `.Jable_smalltool`；若該位置不可寫，會改用 `%APPDATA%\JableTV Downloader\smalltool`。
 

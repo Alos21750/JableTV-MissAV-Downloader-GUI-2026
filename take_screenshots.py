@@ -116,10 +116,17 @@ def capture_smalltool():
         'baseline_date': jable_smalltool.DEFAULT_BASELINE_DATE,
         'resolution': 'highest',
         'version_preference': 'chinese-subtitle',
+        'subtitle_mode': 'none',
+        'scan_schedule': {
+            'mode': 'interval',
+            'interval_hours': 24,
+            'daily_time': '18:00',
+        },
         'first_run_done': False,
         'selected_targets': [],
     }
     jable_smalltool.save_config = lambda _cfg: None
+    jable_smalltool.update_config = lambda _patch, **_kwargs: None
 
     app = jable_smalltool.SmallToolApp()
     prepare_window(app, width=1200, height=800)

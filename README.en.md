@@ -30,7 +30,7 @@
 > **AI subtitles with no API key and no video/audio upload.** After a download, Modern and SmallTool can create selectable `.ja.srt`, `.en.srt`, and `.zh-TW.srt` sidecars without modifying the MP4. Only transcribed text is sent for English/Traditional Chinese translation.
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.32 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.33 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## Pick the right tool
@@ -71,15 +71,14 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 ## SmallTool: monitor categories automatically
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.32 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.33 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
 </p>
 
 1. Choose a destination. If left unset, SmallTool creates `tmp` beside the executable.
-2. Pick a baseline date from the calendar, or use Yesterday / 1 / 2 / 3 / 6 months ago.
-3. Choose quality and version priority: Chinese subtitles, uncensored/leak, standard, English subtitles, or reduced mosaic.
-4. Choose AI subtitles: off, Japanese, English, Traditional Chinese, or all three.
-5. Search and select categories on any of the three site tabs; group-wide selection is available.
-6. Press Start Monitoring. The category panel collapses and progress shows the active scan or subtitle stage.
+2. Select Show settings to change the baseline date, quality, version priority, AI subtitles, and proxy. Collapse settings afterward to give categories the full window.
+3. Search and select categories on any of the three site tabs; group-wide selection is available.
+4. Select Schedule to check every 1–168 hours or once a day at a specified computer-local time.
+5. Press Start Monitoring. Categories remain visible; progress appears only while work is active, and Show activity opens the log area when needed.
 
 | Site | Selectable targets | Groups |
 |---|---:|---|
@@ -87,7 +86,7 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 | MissAV | 102 | Feeds/rankings, categories/tags, and makers |
 | SupJav | 10 | Feeds/rankings and primary categories |
 
-SmallTool checks every 24 hours and also provides Check Now. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—SmallTool does not guess.
+SmallTool can check every 1–168 hours or once a day at a specified time using this computer's local time; existing settings continue to default to every 24 hours. Check Now runs one immediate check without creating another recurring schedule. When the same recognized title code appears across categories or sites, the candidate matching your selected version priority is kept. If a code cannot be identified reliably, only an identical URL is deduplicated—SmallTool does not guess.
 
 State is stored in `.Jable_smalltool` beside the executable when writable, otherwise in `%APPDATA%\JableTV Downloader\smalltool`.
 

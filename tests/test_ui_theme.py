@@ -55,7 +55,7 @@ def test_primary_text_contrast_is_accessible_in_both_themes():
 
 
 def test_current_version_and_global_smalltool_copy_are_complete():
-    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.32'
+    assert gui_modern.APP_VERSION == jable_smalltool.APP_VERSION == '2.5.33'
     required = {
         'st_activity', 'st_progress_idle', 'st_footer_short',
         'st_categories_expand', 'st_categories_collapse',
@@ -66,9 +66,18 @@ def test_current_version_and_global_smalltool_copy_are_complete():
         'st_version_preference', 'st_pref_chinese',
         'st_pref_uncensored', 'st_pref_standard',
         'st_pref_english', 'st_pref_reducing_mosaic',
+        'st_settings_expand', 'st_settings_collapse',
+        'st_activity_show', 'st_activity_hide',
+        'st_schedule', 'st_schedule_title', 'st_schedule_interval',
+        'st_schedule_hours', 'st_schedule_daily',
+        'st_schedule_local_time', 'st_schedule_hint',
+        'st_schedule_save', 'st_schedule_summary_interval',
+        'st_schedule_summary_daily', 'st_schedule_invalid_hours',
+        'st_schedule_invalid_time', 'st_schedule_saved',
+        'st_scan_queued', 'st_waiting_schedule', 'st_stopping',
     }
     for language, strings in locales.STRINGS.items():
-        assert strings['version_label'] == 'v2.5.32', language
+        assert strings['version_label'] == 'v2.5.33', language
         assert required <= strings.keys(), language
 
 
@@ -76,11 +85,11 @@ def test_windows_version_resources_match_app_version():
     root = Path(__file__).resolve().parents[1]
     generator = (root / 'build_tmp' / 'gen_version.py').read_text(
         encoding='utf-8')
-    assert 'VERSION = (2, 5, 32, 0)' in generator
+    assert 'VERSION = (2, 5, 33, 0)' in generator
     for name in ('JableTV_Modern.version', 'Jable_smalltool.version'):
         resource = (root / 'build_tmp' / name).read_text(encoding='utf-8')
-        assert 'filevers=(2, 5, 32, 0)' in resource
-        assert "StringStruct('FileVersion', '2.5.32.0')" in resource
+        assert 'filevers=(2, 5, 33, 0)' in resource
+        assert "StringStruct('FileVersion', '2.5.33.0')" in resource
 
 
 def test_modern_defers_initial_workers_until_mainloop():
@@ -108,18 +117,26 @@ def test_smalltool_balances_category_and_activity_regions():
     source = inspect.getsource(jable_smalltool.SmallToolApp._build_ui)
     assert "main.pack(fill='both', expand=True" in source
     assert 'main.grid_columnconfigure(0, weight=1)' in source
-    assert 'main.grid_rowconfigure(1, weight=3, minsize=190)' in source
-    assert 'main.grid_rowconfigure(4, weight=2, minsize=110)' in source
+    assert 'main.grid_rowconfigure(1, weight=1)' in source
     assert 'cfg_card.grid(row=0' in source
     assert 'selection.grid(row=1' in source
     assert 'ctrl.grid(row=2' in source
     assert 'prog_outer.grid(row=3' in source
     assert 'activity.grid(row=4' in source
+    assert 'prog_outer.grid_remove()' in source
+    assert 'activity.grid_remove()' in source
 
     collapse_source = inspect.getsource(
         jable_smalltool.SmallToolApp._set_categories_collapsed)
     assert '1, weight=0, minsize=0' in collapse_source
-    assert '1, weight=3, minsize=190' in collapse_source
+    assert '1, weight=1, minsize=0' in collapse_source
+
+    start_source = inspect.getsource(
+        jable_smalltool.SmallToolApp._start_worker)
+    check_source = inspect.getsource(
+        jable_smalltool.SmallToolApp._check_now)
+    assert '_set_categories_collapsed(True)' not in start_source
+    assert '_set_categories_collapsed(True)' not in check_source
 
 
 def test_both_apps_expose_windows_proxy_mode_and_mode_aware_status():
@@ -184,8 +201,9 @@ def test_global_version_selector_saves_internal_preference(monkeypatch):
     app = jable_smalltool.SmallToolApp.__new__(jable_smalltool.SmallToolApp)
     app._cfg = {}
     saved = []
-    monkeypatch.setattr(jable_smalltool, 'save_config',
-                        lambda cfg: saved.append(dict(cfg)))
+    monkeypatch.setattr(
+        jable_smalltool, 'update_config',
+        lambda patch, **_kwargs: saved.append(dict(patch)))
 
     app._on_version_change(jable_smalltool.T('st_pref_uncensored'))
 
