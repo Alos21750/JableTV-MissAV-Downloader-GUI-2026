@@ -36,6 +36,11 @@ from subtitle_engine import (
     generate_subtitles,
     normalize_subtitle_mode,
 )
+from translation_settings_ui import (
+    open_translation_settings_dialog,
+    translation_failure_message,
+    translation_provider_summary,
+)
 from ui_theme import (
     ACCENT, ACCENT_HOVER, ACCENT_DIM,
     SUCCESS, SUCCESS_DIM, WARNING, WARNING_DIM, ERROR_C, ERROR_DIM,
@@ -45,7 +50,7 @@ from ui_theme import (
     browse_columns_for_width,
 )
 
-APP_VERSION = '2.5.33'
+APP_VERSION = '2.5.34'
 
 # issue #24: startup breadcrumbs — no-op if crashlog unavailable
 try:
@@ -88,6 +93,7 @@ _SUBTITLE_STATE_BY_STAGE = {
     'queued': '字幕準備中',
     'runtime': '字幕準備中',
     'model': '字幕準備中',
+    'translation_model': '字幕模型準備中',
     'audio': '字幕準備中',
     'transcribe_ja': '字幕辨識中',
     'translate_en': '字幕翻譯中',
@@ -406,7 +412,9 @@ class DownloadManager:
         except SubtitleCancelled:
             task.cancelled.set()
         except Exception as exc:
-            warning = T('subtitle_failed', error=str(exc))
+            warning = T(
+                'subtitle_failed',
+                error=translation_failure_message(exc))
 
         if (task.cancelled.is_set() or self._context_cancelled(task) or
                 bool(getattr(job, '_cancel_job', False))):
@@ -1239,6 +1247,19 @@ class ModernApp(ctk.CTk):
             'all': T('subtitle_all'),
         }.get(config.get_subtitle_pref(), T('subtitle_none'))
 
+    def _open_translation_settings(self):
+        open_translation_settings_dialog(
+            self, on_saved=self._refresh_translation_provider_status)
+
+    def _refresh_translation_provider_status(self):
+        label = getattr(self, '_translation_provider_status_lbl', None)
+        if label is None:
+            return
+        try:
+            label.configure(text=translation_provider_summary())
+        except tk.TclError:
+            pass
+
     def _on_lang_change(self, display_name):
         code = self._lang_code_by_name.get(display_name)
         if not code or code == get_lang():
@@ -1864,6 +1885,26 @@ class ModernApp(ctk.CTk):
             button_hover_color=ACCENT, text_color=TEXT_PRI,
             dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOVER,
             dropdown_text_color=TEXT_PRI).pack(side='left', padx=10)
+
+        row_translation = ctk.CTkFrame(grp, fg_color='transparent')
+        row_translation.pack(fill='x', padx=20, pady=(8, 2))
+        ctk.CTkLabel(
+            row_translation, text=T('translation_provider_setting'),
+            text_color=TEXT_PRI, font=(ui_font(), 12, 'bold'),
+            width=116, anchor='w').pack(side='left')
+        self._translation_provider_status_lbl = ctk.CTkLabel(
+            row_translation, text=translation_provider_summary(),
+            text_color=TEXT_SEC, font=(ui_font(), 10),
+            anchor='w')
+        self._translation_provider_status_lbl.pack(
+            side='left', fill='x', expand=True, padx=10)
+        ctk.CTkButton(
+            row_translation, text=T('translation_provider_configure'),
+            width=86, height=34, corner_radius=8,
+            fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(ui_font(), 10, 'bold'),
+            command=self._open_translation_settings).pack(side='right')
         ctk.CTkLabel(
             grp, text=T('subtitle_desc'), text_color=TEXT_DIM,
             font=(ui_font(), 10), wraplength=760, justify='left').pack(

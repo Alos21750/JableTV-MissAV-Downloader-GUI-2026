@@ -17,14 +17,10 @@ import shutil
 import sys
 import threading
 import time
-import tkinter as tk
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
-from tkinter import filedialog, messagebox
 from typing import Optional
-
-import customtkinter as ctk
 
 # Enable DPI awareness (Windows)
 try:
@@ -61,6 +57,31 @@ try:
 except Exception:
     pass
 
+
+def _run_translation_diagnostic_if_requested():
+    local_output = os.environ.get(
+        'JABLE_LOCAL_TRANSLATION_DIAGNOSTIC_OUTPUT', '')
+    if local_output:
+        from subtitle_engine import run_local_translation_diagnostic
+        run_local_translation_diagnostic(local_output)
+        raise SystemExit(0)
+
+    llm_output = os.environ.get(
+        'JABLE_LLM_TRANSLATION_DIAGNOSTIC_OUTPUT', '')
+    if llm_output:
+        from subtitle_engine import run_llm_translation_diagnostic
+        run_llm_translation_diagnostic(llm_output)
+        raise SystemExit(0)
+
+
+if __name__ == '__main__':
+    _run_translation_diagnostic_if_requested()
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+
 import M3U8Sites
 from M3U8Sites.SiteJableTV import JableTVBrowser
 from M3U8Sites.SiteMissAV import MissAVBrowser
@@ -75,6 +96,11 @@ from smalltool_categories import (
     iter_targets,
     selection_key,
     target_label,
+)
+from translation_settings_ui import (
+    open_translation_settings_dialog,
+    translation_failure_message,
+    translation_provider_summary,
 )
 
 # Keep the optional AI subtitle stack off SmallTool's startup path.  Frozen
@@ -120,7 +146,7 @@ except Exception:
 
 # ── Constants ────────────────────────────────────────────────────────
 APP_NAME = 'Jable_smalltool'
-APP_VERSION = '2.5.33'
+APP_VERSION = '2.5.34'
 DEFAULT_WINDOW_WIDTH = 1180
 DEFAULT_WINDOW_HEIGHT = 780
 MIN_WINDOW_WIDTH = 760
@@ -1359,6 +1385,7 @@ class SmallToolWorker:
                     'queued': 'subtitle_stage_queued',
                     'runtime': 'subtitle_stage_runtime',
                     'model': 'subtitle_stage_model',
+                    'translation_model': 'subtitle_stage_translation_model',
                     'audio': 'subtitle_stage_audio',
                     'transcribe_ja': 'subtitle_stage_transcribe_ja',
                     'translate_en': 'subtitle_stage_translate_en',
@@ -1381,7 +1408,9 @@ class SmallToolWorker:
                 try:
                     from subtitle_engine import SubtitleCancelled
                 except Exception as exc:
-                    self._log(f'  [SUBTITLE-ERR] {T("subtitle_failed", error=str(exc))}')
+                    self._log(
+                        f'  [SUBTITLE-ERR] '
+                        f'{T("subtitle_failed", error=translation_failure_message(exc))}')
                     return 'subtitle_failed'
 
                 try:
@@ -1816,6 +1845,19 @@ class SmallToolApp(ctk.CTk):
             T('subtitle_all'): 'all',
         }.get(str(label or ''), 'none')
 
+    def _open_translation_settings(self):
+        open_translation_settings_dialog(
+            self, on_saved=self._refresh_translation_provider_status)
+
+    def _refresh_translation_provider_status(self):
+        label = getattr(self, '_translation_provider_status_lbl', None)
+        if label is None:
+            return
+        try:
+            label.configure(text=translation_provider_summary(short=True))
+        except tk.TclError:
+            pass
+
     def _set_status_key(self, key: str, fg: str = TEXT_DIM):
         self._status_key = key
         self._status_fg = fg
@@ -2114,6 +2156,36 @@ class SmallToolApp(ctk.CTk):
             dropdown_text_color=TEXT_PRI,
             font=(font_family, 9), dropdown_font=(font_family, 9)).pack(
                 side='left')
+
+        translation_row = ctk.CTkFrame(res_group, fg_color='transparent')
+        translation_row.pack(fill='x', pady=(6, 0))
+        ctk.CTkLabel(
+            translation_row, text=T('translation_provider_setting'),
+            text_color=TEXT_SEC, font=(font_family, 10, 'bold'),
+            width=108, anchor='e').pack(side='left', padx=(0, 8))
+        translation_controls = ctk.CTkFrame(
+            translation_row, fg_color='transparent', width=178, height=34)
+        translation_controls.pack(side='left')
+        translation_controls.pack_propagate(False)
+        self._translation_provider_status_lbl = ctk.CTkLabel(
+            translation_controls,
+            text=translation_provider_summary(short=True),
+            text_color=TEXT_SEC, font=(font_family, 9),
+            anchor='w')
+        self._translation_provider_status_lbl.pack(
+            side='left', fill='x', expand=True)
+        ctk.CTkButton(
+            translation_controls, text=T('translation_provider_configure'),
+            width=64, height=32, corner_radius=CONTROL_RADIUS,
+            fg_color='transparent', border_width=1,
+            border_color=BORDER_HOVER, hover_color=BG_CARD_HOVER,
+            text_color=TEXT_PRI, font=(font_family, 9, 'bold'),
+            command=self._open_translation_settings).pack(side='right')
+        ctk.CTkLabel(
+            res_group, text=T('translation_provider_hint'),
+            text_color=TEXT_DIM, font=(font_family, 8),
+            wraplength=286, justify='right').pack(
+                anchor='e', pady=(3, 0))
         # Apply saved preference immediately (before auto-start)
         from M3U8Sites.M3U8Crawler import set_resolution_pref
         set_resolution_pref(self._cfg.get('resolution', 'highest'))

@@ -1,8 +1,14 @@
 import ast
+import builtins
 import os
+import runpy
+import sys
 import threading
 import time
+import types
 from pathlib import Path
+
+import pytest
 
 import gui_modern
 import jable_smalltool
@@ -31,6 +37,62 @@ def test_smalltool_defers_subtitle_engine_until_download():
         )
     ]
     assert eager_imports == []
+
+
+def test_both_frozen_entry_points_expose_explicit_translation_diagnostic():
+    root = Path(jable_smalltool.__file__).resolve().parent
+    for filename in ('main.py', 'jable_smalltool.py'):
+        source = (root / filename).read_text(encoding='utf-8')
+        assert 'JABLE_LOCAL_TRANSLATION_DIAGNOSTIC_OUTPUT' in source
+        assert 'run_local_translation_diagnostic' in source
+        assert 'JABLE_LLM_TRANSLATION_DIAGNOSTIC_OUTPUT' in source
+        assert 'run_llm_translation_diagnostic' in source
+
+
+def test_llm_diagnostic_exits_both_entry_points_before_gui_import(
+        monkeypatch, tmp_path):
+    root = Path(jable_smalltool.__file__).resolve().parent
+    calls = []
+    fake_engine = types.ModuleType('subtitle_engine')
+
+    def fake_run(output):
+        calls.append(output)
+
+    fake_engine.run_llm_translation_diagnostic = fake_run
+    fake_engine.run_local_translation_diagnostic = lambda _output: None
+    fake_crashlog = types.ModuleType('crashlog')
+    fake_crashlog.install = lambda: None
+    monkeypatch.setitem(sys.modules, 'subtitle_engine', fake_engine)
+    monkeypatch.setitem(sys.modules, 'crashlog', fake_crashlog)
+    monkeypatch.delenv(
+        'JABLE_LOCAL_TRANSLATION_DIAGNOSTIC_OUTPUT', raising=False)
+
+    real_import = builtins.__import__
+    gui_roots = {
+        'args',
+        'customtkinter',
+        'gui',
+        'gui_modern',
+        'M3U8Sites',
+        'tkinter',
+        'translation_settings_ui',
+    }
+
+    def reject_gui_import(name, *args, **kwargs):
+        if str(name).split('.', 1)[0] in gui_roots:
+            raise AssertionError(
+                f'GUI/heavy module imported during diagnostic: {name}')
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', reject_gui_import)
+    for filename in ('main.py', 'jable_smalltool.py'):
+        output = str(tmp_path / f'{filename}.json')
+        monkeypatch.setenv(
+            'JABLE_LLM_TRANSLATION_DIAGNOSTIC_OUTPUT', output)
+        with pytest.raises(SystemExit) as caught:
+            runpy.run_path(str(root / filename), run_name='__main__')
+        assert caught.value.code == 0
+        assert calls[-1] == output
 
 
 class FakeDownloadJob:

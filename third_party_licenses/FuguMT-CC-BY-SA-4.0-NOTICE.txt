@@ -1,0 +1,32 @@
+FuguMT Japanese-to-English model attribution
+================================================
+
+Work:
+  FuguMT Japanese-to-English machine-translation model
+
+Creator:
+  Satoshi Takahashi (staka)
+
+Immutable source used by this distribution:
+  https://huggingface.co/staka/fugumt-ja-en/tree/f7ce11286e1fb7a8e1f1692ff3ab68c0f9c3aecb
+
+Project and training-data acknowledgements:
+  https://github.com/s-taka/fugumt
+
+License:
+  Creative Commons Attribution-ShareAlike 4.0 International
+  (CC BY-SA 4.0)
+  https://creativecommons.org/licenses/by-sa/4.0/
+  https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Changes made for JableTV Downloader:
+  - Converted the pinned Transformers/Marian checkpoint to the CTranslate2
+    model format.
+  - Quantized model weights to INT8.
+  - Added a machine-readable manifest and integrity hashes.
+  - No fine-tuning or additional training was performed.
+
+The converted FuguMT model files are distributed under CC BY-SA 4.0. This
+notice does not imply endorsement by the original creator. The accompanying
+OPUS-MT English-to-Chinese model and application code retain their separately
+stated licenses.

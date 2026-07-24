@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 datas = []
 binaries = []
@@ -7,14 +9,48 @@ hiddenimports = [
     'cloudscraper', 'Crypto.Cipher.AES', 'm3u8',
     'imageio_ffmpeg', 'imageio_ffmpeg.binaries',
     'customtkinter', 'curl_cffi', '_cffi_backend',
-    'crashlog', 'certifi', 'faulthandler', 'updater', 'ssl_util', 'subtitle_engine',
+    'crashlog', 'certifi', 'faulthandler', 'updater', 'ssl_util',
+    'subtitle_engine', 'subtitle_domain', 'llm_translation',
+    'translation_settings', 'translation_settings_ui',
+    'ctranslate2', 'ctranslate2._ext',
+    'numpy._core._exceptions',
+    'sentencepiece', 'sentencepiece._sentencepiece', 'opencc',
     'socks', 'urllib3.contrib.socks',
 ]
 
 # Collect package data (cloudscraper browser profiles, certifi certs, customtkinter themes)
-for pkg in ['cloudscraper', 'certifi', 'customtkinter', 'curl_cffi', 'imageio_ffmpeg']:
+for pkg in [
+        'cloudscraper', 'certifi', 'customtkinter', 'curl_cffi',
+        'imageio_ffmpeg', 'ctranslate2', 'sentencepiece', 'opencc']:
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# The Windows CTranslate2 wheel ships an optional cuDNN DLL even though this
+# application is CPU-only.  ctranslate2 imports every package DLL on Windows,
+# so remove that unused proprietary GPU runtime from both possible TOCs.
+datas = [
+    entry for entry in datas
+    if Path(str(entry[0])).name.lower() != 'cudnn64_9.dll'
+]
+binaries = [
+    entry for entry in binaries
+    if Path(str(entry[0])).name.lower() != 'cudnn64_9.dll'
+]
+datas += copy_metadata('numpy')
+datas += copy_metadata('PyYAML')
+
+datas += [
+    ('..\\LICENSE', '.'),
+    ('..\\THIRD_PARTY_NOTICES.md', '.'),
+    (
+        '..\\third_party_licenses\\FuguMT-CC-BY-SA-4.0-NOTICE.txt',
+        'third_party_licenses',
+    ),
+    (
+        '..\\third_party_licenses\\Intel-Simplified-Software-License.txt',
+        'third_party_licenses',
+    ),
+]
 
 
 a = Analysis(
@@ -43,7 +79,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['libiomp5md.dll', 'ctranslate2.dll', '_ext*.pyd'],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

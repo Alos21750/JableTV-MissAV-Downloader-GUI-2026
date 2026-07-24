@@ -1,5 +1,12 @@
+import hashlib
+import json
 import os
+import shutil
+import subprocess
+import sys
+import time
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,10 +42,570 @@ def test_parse_srt_rejects_malformed_content():
         subtitles.parse_srt('not an srt file')
 
 
-def test_translation_batches_keep_order_and_limits():
-    texts = ['a' * 20, 'b' * 20, 'c' * 20]
-    batches = list(subtitles._translation_batches(texts, max_chars=55))
-    assert batches == [(0, ['a' * 20]), (1, ['b' * 20]), (2, ['c' * 20])]
+def test_translation_source_has_no_google_provider():
+    source = open(subtitles.__file__, encoding='utf-8').read().lower()
+    assert 'translate.googleapis.com' not in source
+    assert 'client=gtx' not in source
+    assert 'translationratelimited' not in source
+    assert '.post(' not in source
+
+
+def test_verified_file_cache_detects_same_process_mutation(tmp_path):
+    component = tmp_path / 'component.bin'
+    component.write_bytes(b'original')
+    expected_hash = hashlib.sha256(b'original').hexdigest()
+    subtitles._verified_paths.clear()
+
+    assert subtitles._is_verified(
+        str(component), len(b'original'), expected_hash)
+    old_stat = component.stat()
+    component.write_bytes(b'tampered')
+    os.utime(
+        component,
+        ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns + 2_000_000_000))
+
+    assert not subtitles._is_verified(
+        str(component), len(b'original'), expected_hash)
+
+
+def test_whisper_runtime_verifier_checks_every_required_native_file(
+        monkeypatch, tmp_path):
+    runtime = tmp_path / 'runtime'
+    component = runtime / 'Release' / 'whisper-cli.exe'
+    component.parent.mkdir(parents=True)
+    component.write_bytes(b'known-runtime')
+    digest = hashlib.sha256(b'known-runtime').hexdigest()
+    (runtime / '.source-sha256').write_text('archive-hash', encoding='ascii')
+    monkeypatch.setattr(subtitles, 'WHISPER_ARCHIVE_SHA256', 'archive-hash')
+    monkeypatch.setattr(
+        subtitles, 'WHISPER_RUNTIME_FILES',
+        {'Release/whisper-cli.exe': (len(b'known-runtime'), digest)})
+    subtitles._verified_paths.clear()
+
+    assert subtitles._verify_whisper_install(str(runtime)) == str(component)
+    component.write_bytes(b'broken-runtim')
+    assert subtitles._verify_whisper_install(str(runtime)) is None
+
+
+def test_interprocess_cache_lock_serializes_two_app_processes(tmp_path):
+    log = tmp_path / 'lock-order.txt'
+    code = (
+        "import os,sys,time\n"
+        "os.environ['LOCALAPPDATA']=sys.argv[1]\n"
+        "from subtitle_engine import _interprocess_cache_lock\n"
+        "name=sys.argv[2]\n"
+        "log=sys.argv[3]\n"
+        "def write(value):\n"
+        "  with open(log,'a',encoding='utf-8') as handle:\n"
+        "    handle.write(value+'\\n'); handle.flush(); os.fsync(handle.fileno())\n"
+        "with _interprocess_cache_lock('pytest-shared-cache',None,10):\n"
+        "  write(name+'-enter')\n"
+        "  if name=='A': time.sleep(0.4)\n"
+        "  write(name+'-exit')\n"
+    )
+    root = os.path.dirname(subtitles.__file__)
+    first = subprocess.Popen(
+        [sys.executable, '-c', code, str(tmp_path), 'A', str(log)],
+        cwd=root)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if log.is_file() and 'A-enter' in log.read_text(encoding='utf-8'):
+            break
+        time.sleep(0.02)
+    else:
+        first.kill()
+        pytest.fail('first process did not acquire the cache lock')
+
+    second = subprocess.Popen(
+        [sys.executable, '-c', code, str(tmp_path), 'B', str(log)],
+        cwd=root)
+    assert first.wait(timeout=15) == 0
+    assert second.wait(timeout=15) == 0
+    assert log.read_text(encoding='utf-8').splitlines() == [
+        'A-enter', 'A-exit', 'B-enter', 'B-exit']
+
+
+def test_translate_cues_uses_exact_domain_rules_and_dedupes_model_work(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(model_dir, texts, target_token, _cancel):
+        calls.append((model_dir, list(texts), target_token))
+        return ['Unknown line.' for _ in texts]
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    result = subtitles.translate_cues(
+        ['やめて', '未知の台詞', '  未知の台詞  '],
+        'ja', 'en', 'translate_en')
+
+    assert result == ['Stop.', 'Unknown line.', 'Unknown line.']
+    assert calls == [('ja-model', ['未知の台詞'], None)]
+
+
+def test_translate_cues_polishes_lowercase_english_model_output(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    monkeypatch.setattr(
+        subtitles, '_run_local_model',
+        lambda *_args: ["i'm ready. i will start now."])
+
+    assert subtitles.translate_cues(
+        ['人工詞庫にない文章'], 'ja', 'en', 'translate_en') == [
+            "I'm ready. I will start now."]
+
+
+def test_japanese_to_chinese_pivot_keeps_raw_english_model_casing(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(model_dir, texts, target_token, _cancel):
+        calls.append((model_dir, list(texts), target_token))
+        if model_dir == 'ja-model':
+            return ["i'm ready to start"]
+        return ['準備開始']
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    monkeypatch.setattr(subtitles, '_to_taiwan_chinese', lambda text: text)
+
+    assert subtitles.translate_cues(
+        ['人工詞庫にない文章'], 'ja', 'zh-TW', 'translate_zh') == ['準備開始']
+    assert calls[1] == (
+        'zh-model', ["i'm ready to start"], '>>cmn_Hant<<')
+
+
+def test_translate_cues_pivots_unknown_japanese_to_taiwan_chinese(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(model_dir, texts, target_token, _cancel):
+        calls.append((model_dir, list(texts), target_token))
+        if model_dir == 'ja-model':
+            return ['This is a test.' for _ in texts]
+        return ['這是測試。' for _ in texts]
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    monkeypatch.setattr(subtitles, '_to_taiwan_chinese', lambda text: text)
+    progress = []
+
+    result = subtitles.translate_cues(
+        ['人工詞庫にない長い文章です。', '人工詞庫にない長い文章です。'],
+        'ja', 'zh-TW', 'translate_zh',
+        lambda stage, percent: progress.append((stage, percent)))
+
+    assert result == ['這是測試。', '這是測試。']
+    assert calls == [
+        ('ja-model', ['人工詞庫にない長い文章です'], None),
+        ('zh-model', ['This is a test'], '>>cmn_Hant<<'),
+    ]
+    percentages = [
+        percent for stage, percent in progress
+        if stage == 'translate_zh' and percent is not None
+    ]
+    assert percentages == sorted(percentages)
+    assert percentages[-1] == 100
+
+
+def test_exact_japanese_to_taiwan_translation_honours_immediate_cancel():
+    with pytest.raises(subtitles.SubtitleCancelled):
+        subtitles.translate_cues(
+            ['やめて'], 'ja', 'zh-TW', 'translate_zh',
+            cancel_check=lambda: True)
+
+
+def test_local_model_honours_cancel_before_loading_runtime():
+    with pytest.raises(subtitles.SubtitleCancelled):
+        subtitles._run_local_model(
+            'model-that-must-not-be-opened', ['字幕'], None,
+            cancel_check=lambda: True)
+
+
+def test_local_translation_memory_is_exact_and_versioned(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    versions = ['engine-v1']
+    monkeypatch.setattr(
+        subtitles, '_translation_memory_version', lambda: versions[0])
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    model_calls = []
+
+    def fake_model(_model_dir, texts, _target_token, _cancel):
+        model_calls.append(list(texts))
+        return ['A cached translation.' for _ in texts]
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    first = subtitles.translate_cues(
+        ['未登録の文章'], 'ja', 'en', 'translate_en')
+    assert first == ['A cached translation.']
+    assert model_calls == [['未登録の文章']]
+
+    monkeypatch.setattr(
+        subtitles, '_run_local_model',
+        lambda *_args: pytest.fail('an exact cache hit must skip the model'))
+    second = subtitles.translate_cues(
+        ['未登録の文章'], 'ja', 'en', 'translate_en')
+    assert second == first
+
+    versions[0] = 'engine-v2'
+    monkeypatch.setattr(
+        subtitles, '_run_local_model',
+        lambda *_args: ['A new-version translation.'])
+    third = subtitles.translate_cues(
+        ['未登録の文章'], 'ja', 'en', 'translate_en')
+    assert third == ['A new-version translation.']
+
+
+def test_translation_memory_version_includes_verified_model_manifest():
+    assert subtitles.TRANSLATION_MANIFEST_SHA256
+    assert (
+        subtitles.TRANSLATION_MANIFEST_SHA256
+        in subtitles._translation_memory_version()
+    )
+
+
+def test_invalid_translation_memory_row_falls_back_to_model(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    source = '人工詞庫にない安全な文章'
+    subtitles._translation_memory_store(
+        {source: '00:00:00,000 --> 00:00:01,000'},
+        'ja', 'en')
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(_model_dir, texts, _target_token, _cancel):
+        calls.append(list(texts))
+        return ['Valid replacement.']
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    assert subtitles.translate_cues(
+        [source], 'ja', 'en', 'translate_en') == ['Valid replacement.']
+    assert calls == [[source]]
+
+
+def test_obsolete_translation_backup_cleanup_is_best_effort(monkeypatch):
+    monkeypatch.setattr(
+        subtitles, '_remove_translation_cache_path',
+        lambda *_args: (_ for _ in ()).throw(PermissionError('busy')))
+    subtitles._remove_translation_cache_path_best_effort(
+        r'C:\cache\v1.previous', r'C:\cache')
+
+
+def test_corrupt_translation_memory_fails_open_without_losing_output(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    path = subtitles._translation_memory_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'wb') as handle:
+        handle.write(b'not a sqlite database')
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    monkeypatch.setattr(
+        subtitles, '_run_local_model',
+        lambda *_args: ['Translation survives.'])
+
+    assert subtitles.translate_cues(
+        ['未登録の長い文章'], 'ja', 'en', 'translate_en') == [
+            'Translation survives.']
+
+
+def test_chinese_stage_reuses_prior_english_model_result(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(model_dir, texts, target_token, _cancel):
+        calls.append((model_dir, list(texts), target_token))
+        if model_dir == 'ja-model':
+            return ['Previously translated.' for _ in texts]
+        return ['先前已翻譯。' for _ in texts]
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    monkeypatch.setattr(subtitles, '_to_taiwan_chinese', lambda text: text)
+    source = ['人工詞庫之外の文章。']
+    assert subtitles.translate_cues(
+        source, 'ja', 'en', 'translate_en') == ['Previously translated.']
+    assert subtitles.translate_cues(
+        source, 'ja', 'zh-TW', 'translate_zh') == ['先前已翻譯。']
+    assert calls == [
+        ('ja-model', ['人工詞庫之外の文章'], None),
+        ('zh-model', ['Previously translated'], '>>cmn_Hant<<'),
+    ]
+
+
+def test_model_dedupe_keeps_terminal_punctuation_input_order_independent(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(
+        subtitles, '_prepare_translation_runtime',
+        lambda _progress, _cancel: {'ja-en': 'ja-model', 'en-zh': 'zh-model'})
+    calls = []
+
+    def fake_model(_model_dir, texts, _target_token, _cancel):
+        calls.append(list(texts))
+        return ['Translated' for _ in texts]
+
+    monkeypatch.setattr(subtitles, '_run_local_model', fake_model)
+    plain = '未登録の台詞'
+    emphatic = '未登録の台詞！'
+
+    assert subtitles.translate_cues(
+        [plain, emphatic], 'ja', 'en', 'translate_en') == [
+            'Translated', 'Translated!']
+    assert subtitles.translate_cues(
+        [emphatic, plain], 'ja', 'en', 'translate_en') == [
+            'Translated!', 'Translated']
+    assert calls == [[plain]]
+
+
+def test_taiwan_model_output_uses_fullwidth_terminal_punctuation():
+    assert subtitles._restore_terminal_punctuation(
+        '痛くないですか？', '會痛嗎?', 'zh-TW') == '會痛嗎？'
+    assert subtitles._restore_terminal_punctuation(
+        '止めて！', '停下來!', 'zh-TW') == '停下來！'
+    assert subtitles._restore_terminal_punctuation(
+        '終わりました。', '結束了.', 'zh-TW') == '結束了。'
+
+
+def test_local_translation_diagnostic_writes_complete_atomic_evidence(
+        monkeypatch, tmp_path):
+    calls = []
+
+    def fake_translate(texts, source_language, target_language, stage):
+        calls.append((list(texts), source_language, target_language, stage))
+        return (
+            ['English diagnostic.']
+            if target_language == 'en'
+            else ['繁中診斷。']
+        )
+
+    monkeypatch.setattr(subtitles, 'translate_cues', fake_translate)
+    monkeypatch.setattr(
+        subtitles, '_to_taiwan_chinese',
+        lambda _text: '軟體和影片在這裡。')
+    output = tmp_path / 'diagnostic.json'
+
+    payload = subtitles.run_local_translation_diagnostic(str(output))
+
+    assert payload['schema'] == 1
+    assert payload['english'] == 'English diagnostic.'
+    assert payload['taiwan'] == '繁中診斷。'
+    assert payload['opencc'] == '軟體和影片在這裡。'
+    assert payload['phrase_count'] >= 900
+    assert json.loads(output.read_text(encoding='utf-8')) == payload
+    assert not list(tmp_path.glob('*.tmp'))
+    assert [call[2] for call in calls] == ['en', 'zh-TW']
+
+
+def test_llm_translation_diagnostic_uses_api_branch_and_redacts_evidence(
+        monkeypatch, tmp_path):
+    profile = SimpleNamespace(
+        provider='openai-compatible',
+        model='diagnostic-model',
+        base_url='http://127.0.0.1:18080/private-account/v1',
+        api_key='must-never-appear',
+        uses_api=True,
+    )
+    monkeypatch.setattr(
+        subtitles, '_selected_translation_profile', lambda: profile)
+    calls = []
+    private_translation = 'Private provider response body.'
+
+    def fake_api(
+            texts, source_language, target_language, progress_stage,
+            progress_callback, cancel_check, selected_profile):
+        calls.append((
+            list(texts), source_language, target_language, progress_stage,
+            progress_callback, cancel_check, selected_profile,
+        ))
+        return [private_translation]
+
+    monkeypatch.setattr(subtitles, '_translate_api_direct', fake_api)
+    output = tmp_path / 'llm-diagnostic.json'
+
+    payload = subtitles.run_llm_translation_diagnostic(str(output))
+
+    assert len(calls) == 1
+    texts, source, target, stage, _progress, _cancel, selected = calls[0]
+    assert len(texts) == 1
+    assert '確認番号' in texts[0]
+    assert source == 'ja'
+    assert target == 'en'
+    assert stage == 'diagnostic_llm_translate_en'
+    assert selected is profile
+    assert payload['kind'] == 'llm_translation'
+    assert payload['provider'] == 'openai-compatible'
+    assert payload['model'] == 'diagnostic-model'
+    assert payload['cue_count'] == 1
+    assert len(payload['endpoint_sha256']) == 64
+    assert len(payload['source_sha256']) == 64
+    assert len(payload['translation_sha256']) == 64
+    serialized = output.read_text(encoding='utf-8')
+    assert json.loads(serialized) == payload
+    assert profile.api_key not in serialized
+    assert profile.base_url not in serialized
+    assert texts[0] not in serialized
+    assert private_translation not in serialized
+    assert not list(tmp_path.glob('*.tmp'))
+
+
+def test_llm_translation_diagnostic_requires_api_and_sanitizes_failures(
+        monkeypatch, tmp_path):
+    local_profile = SimpleNamespace(
+        provider='local', model='', base_url='', api_key='', uses_api=False)
+    monkeypatch.setattr(
+        subtitles, '_selected_translation_profile', lambda: local_profile)
+    with pytest.raises(subtitles.SubtitleError, match='external'):
+        subtitles.run_llm_translation_diagnostic(
+            str(tmp_path / 'local.json'))
+
+    secret = 'never-log-this-key'
+    api_profile = SimpleNamespace(
+        provider='openai',
+        model='diagnostic-model',
+        base_url='https://api.example.test/response-body-token',
+        api_key=secret,
+        uses_api=True,
+    )
+    monkeypatch.setattr(
+        subtitles, '_selected_translation_profile', lambda: api_profile)
+
+    def fail_api(*_args, **_kwargs):
+        raise subtitles.SubtitleError(
+            f'{secret} https://api.example.test private response body')
+
+    monkeypatch.setattr(subtitles, '_translate_api_direct', fail_api)
+    with pytest.raises(subtitles.SubtitleError) as caught:
+        subtitles.run_llm_translation_diagnostic(
+            str(tmp_path / 'failed.json'))
+    message = str(caught.value)
+    assert secret not in message
+    assert 'api.example.test' not in message
+    assert 'response body' not in message
+    assert caught.value.__cause__ is None
+    assert not (tmp_path / 'failed.json').exists()
+
+
+def test_prepare_translation_runtime_installs_and_verifies_pack(
+        monkeypatch, tmp_path):
+    payload = {}
+    for model in ('fugumt-ja-en-int8', 'opus-mt-en-zh-int8'):
+        for filename in (
+                'config.json', 'model.bin', 'shared_vocabulary.json',
+                'source.spm', 'target.spm'):
+            path = f'models/{model}/{filename}'
+            payload[path] = f'{model}:{filename}'.encode()
+    payload['models/fugumt-ja-en-int8/vocab.json'] = b'{"<unk>": 0}'
+    manifest = {
+        'pack_version': 'test',
+        'models': {
+            'ja-en': {'path': 'models/fugumt-ja-en-int8'},
+            'en-zh': {'path': 'models/opus-mt-en-zh-int8'},
+        },
+        'files': [
+            {
+                'path': path,
+                'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest(),
+            }
+            for path, data in sorted(payload.items())
+        ],
+    }
+    manifest_bytes = (
+        json.dumps(manifest, sort_keys=True) + '\n').encode()
+    archive = tmp_path / 'source.zip'
+    with zipfile.ZipFile(archive, 'w') as bundle:
+        bundle.writestr('manifest.json', manifest_bytes)
+        for path, data in payload.items():
+            bundle.writestr(path, data)
+
+    archive_bytes = archive.read_bytes()
+    monkeypatch.setattr(subtitles, 'TRANSLATION_PACK_VERSION', 'test')
+    monkeypatch.setattr(subtitles, 'TRANSLATION_PACK_NAME', 'models.zip')
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_PACK_SIZE', len(archive_bytes))
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_PACK_SHA256',
+        hashlib.sha256(archive_bytes).hexdigest())
+    monkeypatch.setattr(
+        subtitles, 'TRANSLATION_MANIFEST_SHA256',
+        hashlib.sha256(manifest_bytes).hexdigest())
+    monkeypatch.setattr(subtitles, '_cache_root', lambda: str(tmp_path / 'cache'))
+    subtitles._verified_paths.clear()
+    downloads = []
+
+    def fake_download(_url, destination, _size, _sha, _stage, _cb, _cancel):
+        downloads.append(destination)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copyfile(archive, destination)
+        return destination
+
+    monkeypatch.setattr(subtitles, '_download_verified', fake_download)
+    models = subtitles._prepare_translation_runtime(None, None)
+    assert os.path.isfile(os.path.join(models['ja-en'], 'model.bin'))
+    assert os.path.isfile(os.path.join(models['en-zh'], 'model.bin'))
+    assert not os.path.exists(downloads[0])
+
+    again = subtitles._prepare_translation_runtime(None, None)
+    assert again == models
+    assert len(downloads) == 1
+
+    runtime_root = os.path.dirname(os.path.dirname(models['ja-en']))
+    stale_parent = os.path.dirname(runtime_root)
+    stale = os.path.join(
+        stale_parent, 'translation-vtest-install-stale')
+    os.makedirs(stale)
+    with open(os.path.join(stale, 'partial.bin'), 'wb') as handle:
+        handle.write(b'partial')
+    foreign_install = os.path.join(
+        stale_parent, 'translation-vother-install-active')
+    os.makedirs(foreign_install)
+    with open(os.path.join(foreign_install, 'active.bin'), 'wb') as handle:
+        handle.write(b'active')
+    previous = runtime_root + '.previous'
+    shutil.copytree(runtime_root, previous)
+    with open(os.path.join(models['ja-en'], 'model.bin'), 'wb') as handle:
+        handle.write(b'tampered')
+    subtitles._verified_paths.clear()
+    recovered = subtitles._prepare_translation_runtime(None, None)
+    assert len(downloads) == 1
+    assert not os.path.exists(stale)
+    assert os.path.isfile(os.path.join(foreign_install, 'active.bin'))
+    assert not os.path.exists(previous)
+    assert open(
+        os.path.join(recovered['ja-en'], 'model.bin'), 'rb').read() == (
+            payload['models/fugumt-ja-en-int8/model.bin'])
+
+    with open(os.path.join(recovered['ja-en'], 'model.bin'), 'wb') as handle:
+        handle.write(b'tampered again')
+    subtitles._verified_paths.clear()
+    repaired = subtitles._prepare_translation_runtime(None, None)
+    assert len(downloads) == 2
+    assert open(
+        os.path.join(repaired['ja-en'], 'model.bin'), 'rb').read() == (
+            payload['models/fugumt-ja-en-int8/model.bin'])
 
 
 def test_translate_srt_preserves_timestamps(monkeypatch, tmp_path):
@@ -48,14 +615,10 @@ def test_translate_srt_preserves_timestamps(monkeypatch, tmp_path):
         _sample_srt('一番目') + '\n2\n00:00:02,000 --> 00:00:03,000\n二番目\n',
         encoding='utf-8')
 
-    class FakeSession:
-        def close(self):
-            pass
-
-    monkeypatch.setattr(subtitles, '_session', lambda: FakeSession())
     monkeypatch.setattr(
-        subtitles, '_translate_batch',
-        lambda _session, texts, _target, _cancel: [f'中:{text}' for text in texts])
+        subtitles, 'translate_cues',
+        lambda texts, _source, _target, _stage, _progress, _cancel:
+            [f'中:{text}' for text in texts])
 
     subtitles.translate_srt_to_zh_tw(str(source), str(destination))
     result = destination.read_text(encoding='utf-8')
@@ -63,6 +626,13 @@ def test_translate_srt_preserves_timestamps(monkeypatch, tmp_path):
     assert '00:00:02,000 --> 00:00:03,000' in result
     assert '中:一番目' in result
     assert '中:二番目' in result
+    source_cues = subtitles.parse_srt(source.read_text(encoding='utf-8'))
+    result_cues = subtitles.parse_srt(result)
+    assert len(result_cues) == len(source_cues)
+    assert [cue.index for cue in result_cues] == [
+        cue.index for cue in source_cues]
+    assert [cue.timing for cue in result_cues] == [
+        cue.timing for cue in source_cues]
 
 
 def test_generate_all_creates_three_selectable_sidecars(monkeypatch, tmp_path):
@@ -84,8 +654,14 @@ def test_generate_all_creates_three_selectable_sidecars(monkeypatch, tmp_path):
         return output
 
     def fake_translate(source, destination, target, stage,
-                       progress_callback=None, cancel_check=None):
-        assert 'こんにちは' in open(source, encoding='utf-8').read()
+                       progress_callback=None, cancel_check=None,
+                       source_language='ja'):
+        source_text = open(source, encoding='utf-8').read()
+        if source_language == 'ja':
+            assert 'こんにちは' in source_text
+        else:
+            assert source_language == 'en'
+            assert 'hello' in source_text
         with open(destination, 'w', encoding='utf-8') as handle:
             handle.write(_sample_srt('hello' if target == 'en' else '你好'))
         if progress_callback:
@@ -97,9 +673,10 @@ def test_generate_all_creates_three_selectable_sidecars(monkeypatch, tmp_path):
     monkeypatch.setattr(subtitles, 'translate_srt', fake_translate)
     monkeypatch.setattr(
         subtitles, 'translate_srt_to_zh_tw',
-        lambda source, destination, progress_callback=None, cancel_check=None:
+        lambda source, destination, progress_callback=None, cancel_check=None,
+        source_language='ja':
             fake_translate(source, destination, 'zh-TW', 'translate_zh',
-                           progress_callback, cancel_check))
+                           progress_callback, cancel_check, source_language))
 
     result = subtitles.generate_subtitles(
         str(video), 'all', progress_callback=lambda stage, pct: stages.append((stage, pct)))
@@ -139,6 +716,34 @@ def test_chinese_failure_preserves_japanese_fallback(monkeypatch, tmp_path):
     assert not (tmp_path / 'movie.zh-TW.srt').exists()
 
 
+def test_chinese_reuses_existing_english_without_whisper(
+        monkeypatch, tmp_path):
+    video = tmp_path / 'movie.mp4'
+    video.write_bytes(b'video')
+    english = tmp_path / 'movie.en.srt'
+    english.write_text(_sample_srt('Existing English.'), encoding='utf-8')
+    monkeypatch.setattr(
+        subtitles, '_prepare_runtime',
+        lambda *_args: pytest.fail('English SRT should avoid Whisper'))
+    calls = []
+
+    def fake_chinese(source, destination, progress_callback=None,
+                     cancel_check=None, source_language='ja'):
+        calls.append((source, source_language))
+        with open(destination, 'w', encoding='utf-8') as handle:
+            handle.write(_sample_srt('既有繁中。'))
+        return destination
+
+    monkeypatch.setattr(
+        subtitles, 'translate_srt_to_zh_tw', fake_chinese)
+    result = subtitles.generate_subtitles(str(video), 'zh')
+
+    assert calls == [(str(english), 'en')]
+    assert [os.path.basename(path) for path in result.files] == [
+        'movie.zh-TW.srt']
+    assert not (tmp_path / 'movie.ja.srt').exists()
+
+
 def test_existing_outputs_skip_runtime(monkeypatch, tmp_path):
     video = tmp_path / 'movie.mp4'
     video.write_bytes(b'video')
@@ -152,9 +757,81 @@ def test_existing_outputs_skip_runtime(monkeypatch, tmp_path):
     assert result.generated == ()
 
 
-def test_safe_zip_extraction_rejects_parent_traversal(tmp_path):
+@pytest.mark.parametrize(
+    'member',
+    ['../outside.exe', '/absolute.exe', 'C:/drive.exe',
+     'folder/../outside.exe', 'model.bin:stream'])
+def test_safe_zip_extraction_rejects_unsafe_paths(tmp_path, member):
     archive = tmp_path / 'unsafe.zip'
     with zipfile.ZipFile(archive, 'w') as bundle:
-        bundle.writestr('../outside.exe', b'bad')
+        bundle.writestr(member, b'bad')
     with pytest.raises(subtitles.SubtitleError):
         subtitles._safe_extract_zip(str(archive), str(tmp_path / 'extract'))
+
+
+def test_safe_zip_extraction_rejects_duplicates_and_links(tmp_path):
+    duplicate = tmp_path / 'duplicate.zip'
+    with pytest.warns(UserWarning):
+        with zipfile.ZipFile(duplicate, 'w') as bundle:
+            bundle.writestr('model.bin', b'first')
+            bundle.writestr('model.bin', b'second')
+    with pytest.raises(subtitles.SubtitleError):
+        subtitles._safe_extract_zip(
+            str(duplicate), str(tmp_path / 'duplicate-extract'))
+
+    link = tmp_path / 'link.zip'
+    link_info = zipfile.ZipInfo('model-link')
+    link_info.create_system = 3
+    link_info.external_attr = 0o120777 << 16
+    with zipfile.ZipFile(link, 'w') as bundle:
+        bundle.writestr(link_info, b'model.bin')
+    with pytest.raises(subtitles.SubtitleError):
+        subtitles._safe_extract_zip(
+            str(link), str(tmp_path / 'link-extract'))
+
+
+def test_safe_zip_extraction_reports_progress_and_honours_cancel(tmp_path):
+    archive = tmp_path / 'safe.zip'
+    with zipfile.ZipFile(archive, 'w') as bundle:
+        bundle.writestr('models/model.bin', b'x' * (2 * 1024 * 1024 + 17))
+
+    progress = []
+    destination = tmp_path / 'complete'
+    subtitles._safe_extract_zip(
+        str(archive), str(destination),
+        lambda stage, percent: progress.append((stage, percent)),
+        progress_stage='translation_model',
+        progress_start=70,
+        progress_end=85)
+    percentages = [percent for _stage, percent in progress]
+    assert percentages == sorted(percentages)
+    assert percentages[0] == 70
+    assert percentages[-1] == 85
+    assert (destination / 'models' / 'model.bin').stat().st_size == (
+        2 * 1024 * 1024 + 17)
+
+    checks = 0
+
+    def cancelled():
+        nonlocal checks
+        checks += 1
+        return checks >= 4
+
+    with pytest.raises(subtitles.SubtitleCancelled):
+        subtitles._safe_extract_zip(
+            str(archive), str(tmp_path / 'cancelled'),
+            cancel_check=cancelled)
+
+
+def test_existing_subtitle_rejects_empty_and_malformed_sidecars(tmp_path):
+    sidecar = tmp_path / 'movie.en.srt'
+    assert not subtitles._existing(str(sidecar))
+
+    sidecar.write_bytes(b'')
+    assert not subtitles._existing(str(sidecar))
+
+    sidecar.write_text('not an srt', encoding='utf-8')
+    assert not subtitles._existing(str(sidecar))
+
+    sidecar.write_text(_sample_srt('Valid subtitle.'), encoding='utf-8')
+    assert subtitles._existing(str(sidecar))

@@ -27,10 +27,10 @@
 </p>
 
 > [!TIP]
-> **AI subtitles with no API key and no video/audio upload.** After a download, Modern and SmallTool can create selectable `.ja.srt`, `.en.srt`, and `.zh-TW.srt` sidecars without modifying the MP4. Only transcribed text is sent for English/Traditional Chinese translation.
+> **Fully local by default, with no API key and no uploads.** After a download, Modern and SmallTool can create selectable `.ja.srt`, `.en.srt`, and `.zh-TW.srt` sidecars without modifying the MP4. You can optionally connect a common LLM API; recognized subtitle text is then the only media-derived content sent, alongside required API authentication and ordinary connection metadata—never video or audio.
 
 <p align="center">
-  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.33 English dark interface with JableTV, MissAV and SupJav browse tabs" />
+  <img src="./img/readme_modern.png" width="100%" alt="JableTV Downloader Modern v2.5.34 English dark interface with JableTV, MissAV and SupJav browse tabs" />
 </p>
 
 ## Pick the right tool
@@ -63,7 +63,7 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 | Download queue | Per-item state, progress, and speed; queue persistence; retry one failed item |
 | Concurrency | 2 video downloads by default, up to 32; AI subtitles run in a separate background queue without occupying download slots |
 | Quality preference | Highest, 1080p, 720p, 480p, 360p, or Lowest; actual variants depend on the source |
-| AI subtitles | Off, Japanese, English, Traditional Chinese, or all three as selectable sidecar SRT files |
+| AI subtitles | Off, Japanese, English, Traditional Chinese, or all three; translation is local by default, with an optional user-configured LLM API; output is selectable sidecar SRT files |
 | URL input | Clipboard detection, manual paste, and text/CSV batch import |
 | Proxy | Custom HTTP, HTTPS, SOCKS4, or SOCKS5, or the enabled Windows manual ProxyServer; no change to the Windows global proxy |
 | Updates | Background GitHub Release check; the user confirms before installing an update |
@@ -71,7 +71,7 @@ If Windows SmartScreen appears, first verify that the file came from this projec
 ## SmallTool: monitor categories automatically
 
 <p align="center">
-  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.33 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
+  <img src="./img/readme_smalltool.png" width="100%" alt="Jable SmallTool v2.5.34 Traditional Chinese dark interface showing MissAV categories, date, quality, version priority, and AI subtitles" />
 </p>
 
 1. Choose a destination. If left unset, SmallTool creates `tmp` beside the executable.
@@ -92,11 +92,14 @@ State is stored in `.Jable_smalltool` beside the executable when writable, other
 
 ## AI subtitles: download first, get selectable Japanese, English, and Traditional Chinese SRTs
 
-- Both Windows GUIs offer **Off / Japanese / English / Traditional Chinese / all three** before download. When the video finishes, they automatically create `.ja.srt`, `.en.srt`, and `.zh-TW.srt` beside it without modifying the MP4 or requiring an API key.
+- Both Windows GUIs offer **Off / Japanese / English / Traditional Chinese / all three** before download. When the video finishes, they automatically create `.ja.srt`, `.en.srt`, and `.zh-TW.srt` beside it without modifying the MP4. Subtitle translation defaults to the local mode, which requires no API key.
 - Japanese transcription runs locally with the official [whisper.cpp](https://github.com/ggml-org/whisper.cpp). First use downloads and SHA-256-verifies the approximately 60 MB multilingual [base-q5_1 model](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base-q5_1.bin) plus the [official Silero VAD](https://huggingface.co/ggml-org/whisper-vad/tree/main). The current source-language assumption is Japanese audio, and VAD skips non-speech regions.
-- English and Traditional Chinese send only transcribed subtitle text to a no-key Google translation endpoint; video and audio are never uploaded. This free route has no service guarantee. On failure the video and Japanese SRT are kept, and the GUI reports the problem and offers a retry.
+- Local English and Taiwan Traditional Chinese translation uses pinned, SHA-256-verified [FuguMT](https://huggingface.co/staka/fugumt-ja-en) and [OPUS-MT](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) INT8 models. It does not use Google or another free network translation endpoint. The approximately **147 MB** local translation pack is downloaded only when an English, Traditional Chinese, or all-three subtitle job actually starts. Off and Japanese-only jobs do not download it, and an LLM API job does not need it. Once downloaded, the pack can be reused offline.
+- Optional API extensions support the **OpenAI, Anthropic, Gemini**, and **OpenAI-compatible** APIs. The compatible option can connect to services such as DeepSeek, OpenRouter, Groq, Ollama, and LiteLLM. Recognized subtitle text is the only media-derived content sent to the selected service; required API authentication and ordinary connection metadata are also sent, while video and audio always remain local.
+- User-supplied API keys are encrypted with Windows DPAPI for the current signed-in Windows account. No API key is bundled with the project or either EXE. Pricing, quotas, data handling, and acceptable-use policies depend on the chosen provider; check that provider's current terms before use.
+- Local translation keeps every cue attached to its original timestamp and adds more than 900 maintainer-authored and reviewed adult-domain, safety/consent, filming-privacy, production-direction, and everyday phrases, plus conservative Taiwan wording and versioned exact-match translation memory. It deliberately avoids fuzzy matching that could invert meanings such as “stop” and “don’t stop.”
 - Modern keeps video downloads and subtitle processing in separate queues, so background subtitle work does not occupy any of the 1–32 video download slots.
-- Runtime depends on CPU, video length, and the amount of speech. All-three mode reuses one local transcription pass.
+- Runtime depends on CPU, video length, the amount of speech, and the selected translation service. All-three mode reuses one local transcription pass; local mode also reuses intermediate translation output instead of repeating inference.
 
 ## Supported scope
 

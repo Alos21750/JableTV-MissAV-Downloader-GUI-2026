@@ -15,6 +15,7 @@ vanish with no information. Two kinds of crash need two mechanisms:
 We also drop breadcrumbs (breadcrumb()) so even a hard crash tells us how far
 startup got (categories loaded? page loaded? thumbnails?).
 """
+import atexit
 import os
 import sys
 import threading
@@ -22,6 +23,26 @@ import traceback
 from datetime import datetime
 
 _fault_file = None   # kept open for the process lifetime so faulthandler can write on crash
+
+
+def _disarm_faulthandler():
+    """Release the native crash log cleanly during normal interpreter exit."""
+    global _fault_file
+    try:
+        import faulthandler
+        if faulthandler.is_enabled():
+            faulthandler.disable()
+    except Exception:
+        pass
+    handle, _fault_file = _fault_file, None
+    if handle is not None:
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
+atexit.register(_disarm_faulthandler)
 
 
 def _base_dir():
@@ -92,6 +113,8 @@ def _arm_faulthandler():
     global _fault_file
     try:
         import faulthandler
+        if _fault_file is not None:
+            _disarm_faulthandler()
         # start a fresh native log each run so the user pastes only the last crash
         _fault_file = open(_path("crash_native.log"), "w", encoding="utf-8")
         _fault_file.write(

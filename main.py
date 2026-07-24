@@ -35,6 +35,26 @@ try:
 except Exception:
     pass
 
+
+def _run_translation_diagnostic_if_requested():
+    local_output = _os.environ.get(
+        'JABLE_LOCAL_TRANSLATION_DIAGNOSTIC_OUTPUT', '')
+    if local_output:
+        from subtitle_engine import run_local_translation_diagnostic
+        run_local_translation_diagnostic(local_output)
+        raise SystemExit(0)
+
+    llm_output = _os.environ.get(
+        'JABLE_LLM_TRANSLATION_DIAGNOSTIC_OUTPUT', '')
+    if llm_output:
+        from subtitle_engine import run_llm_translation_diagnostic
+        run_llm_translation_diagnostic(llm_output)
+        raise SystemExit(0)
+
+
+if __name__ == '__main__':
+    _run_translation_diagnostic_if_requested()
+
 # Enable DPI awareness BEFORE any Tk/GUI imports
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-monitor V2
